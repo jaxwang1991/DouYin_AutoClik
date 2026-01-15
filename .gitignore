@@ -28,3 +28,6 @@ state.json
 # Windows 特殊设备名，避免被 Git 处理
 nul
 
+# Claude Code 临时文件
+tmpclaude-*-cwd
+

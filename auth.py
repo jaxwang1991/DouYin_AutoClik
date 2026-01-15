@@ -1,37 +1,49 @@
+"""
+DouYin Login Module - Simplified using BrowserBase
+"""
 import asyncio
-from playwright.async_api import async_playwright
-import os
+from base import BrowserBase
 
-async def login():
-    async with async_playwright() as p:
-        print("正在启动浏览器...")
-        # 启动有头模式，方便用户扫码
-        browser = await p.chromium.launch(headless=False, args=["--start-maximized"])
-        context = await browser.new_context(
-            viewport={"width": 1920, "height": 1080}, # 设置一个较大的视口
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-        page = await context.new_page()
-        
-        print("正在打开抖音首页...")
-        await page.goto("https://www.douyin.com/")
-        
-        print("\n" + "="*50)
-        print("请在弹出的浏览器窗口中完成登录（推荐使用抖音APP扫码）。")
-        print("登录成功后，请回到此命令行窗口，按【回车键】保存状态并退出。")
-        print("="*50 + "\n")
-        
-        # 使用 run_in_executor 避免阻塞事件循环，尽管在这个简单脚本中直接 input 也可以
+
+class LoginHandler(BrowserBase):
+    """Handle DouYin login process"""
+
+    async def login(self):
+        """Run login flow"""
+        print("Starting browser...")
+
+        # Launch browser in visible mode for QR code scanning
+        await self.launch_browser(headless=False, maximized=True)
+
+        print("Opening DouYin homepage...")
+        await self.page.goto("https://www.douyin.com/")
+
+        print("\n" + "=" * 50)
+        print("Please login in the browser window (QR code recommended).")
+        print("Press [Enter] here after login is complete.")
+        print("=" * 50 + "\n")
+
+        # Wait for user confirmation
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, input, "登录完成后，请按回车键继续...")
-        
-        # 保存 cookies 和 local storage
-        await context.storage_state(path="state.json")
-        print("\n登录状态已保存到 state.json")
-        print("您现在可以运行 main.py 进行自动点赞了。")
-        
-        await browser.close()
+        await loop.run_in_executor(None, input, "Press Enter when done...")
+
+        # Save state
+        await self.save_state()
+
+        print("\nLogin state saved!")
+        print("You can now run the auto-liker.")
+
+        await self.close()
+
+
+async def main():
+    print("Preparing login...")
+    handler = LoginHandler()
+    try:
+        await handler.login()
+    except Exception as e:
+        print(f"Error: {e}")
+
 
 if __name__ == "__main__":
-    print("准备开始登录流程...")
-    asyncio.run(login())
+    asyncio.run(main())
