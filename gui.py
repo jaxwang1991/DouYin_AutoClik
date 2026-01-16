@@ -13,6 +13,9 @@ class App:
         self.root.title("抖音直播自动点赞助手 v2.0")
         self.root.geometry("600x750")
         
+        # 状态标志
+        self.is_showing_captcha_alert = False
+        
         # 异步循环和业务对象
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self._run_async_loop, daemon=True)
@@ -96,20 +99,27 @@ class App:
         frame_ctrl = ttk.Frame(self.root, padding=10)
         frame_ctrl.pack(fill="x")
         
+        # 使用 grid 布局来分行显示
+        # 第一行：状态栏
         self.status_var = tk.StringVar(value="状态: 就绪 | 累计点赞: 0")
-        ttk.Label(frame_ctrl, textvariable=self.status_var, foreground="blue").pack(side="left")
+        lbl_status = ttk.Label(frame_ctrl, textvariable=self.status_var, foreground="blue")
+        lbl_status.grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
         
-        self.btn_stop = ttk.Button(frame_ctrl, text="停止任务", command=self.stop_task, state="disabled")
-        self.btn_stop.pack(side="right", padx=5)
+        # 第二行：按钮组 (使用一个子Frame来居中或右对齐按钮)
+        frame_btns = ttk.Frame(frame_ctrl)
+        frame_btns.grid(row=1, column=0, columnspan=4, sticky="e")
+        
+        self.btn_start = ttk.Button(frame_btns, text="开始任务", command=self.start_task)
+        self.btn_start.pack(side="left", padx=5)
 
-        self.btn_resume = ttk.Button(frame_ctrl, text="恢复", command=self.resume_task, state="disabled")
-        self.btn_resume.pack(side="right", padx=5)
+        self.btn_pause = ttk.Button(frame_btns, text="暂停", command=self.pause_task, state="disabled")
+        self.btn_pause.pack(side="left", padx=5)
+
+        self.btn_resume = ttk.Button(frame_btns, text="恢复", command=self.resume_task, state="disabled")
+        self.btn_resume.pack(side="left", padx=5)
         
-        self.btn_pause = ttk.Button(frame_ctrl, text="暂停", command=self.pause_task, state="disabled")
-        self.btn_pause.pack(side="right", padx=5)
-        
-        self.btn_start = ttk.Button(frame_ctrl, text="开始任务", command=self.start_task)
-        self.btn_start.pack(side="right", padx=5)
+        self.btn_stop = ttk.Button(frame_btns, text="停止任务", command=self.stop_task, state="disabled")
+        self.btn_stop.pack(side="left", padx=5)
 
     def append_log(self, msg):
         # 线程安全更新UI
@@ -126,16 +136,21 @@ class App:
         
         # 处理特殊状态
         if state_text == "PAUSED_FOR_CAPTCHA":
-            self.root.after(0, lambda: messagebox.showwarning(
-                "需要人工介入", 
-                "⚠️ 检测到抖音弹出验证码！\n\n请切换到浏览器窗口完成验证。\n验证码消失后，程序会自动恢复点赞。"
-            ))
+            if not self.is_showing_captcha_alert:
+                self.is_showing_captcha_alert = True
+                self.root.after(0, self._show_captcha_alert)
             
         # 如果检测到停止，重置按钮状态
         if state_text == "STOPPED":
             self.root.after(0, self.reset_buttons)
-            # 如果是异常停止或直播结束，可以在这里弹窗
-            # 但为了不打扰用户，暂时只在日志显示
+            self.is_showing_captcha_alert = False # 重置标志
+            
+    def _show_captcha_alert(self):
+        messagebox.showwarning(
+            "需要人工介入", 
+            "⚠️ 检测到抖音弹出验证码！\n\n请切换到浏览器窗口完成验证。\n验证码消失后，程序会自动恢复点赞。"
+        )
+        self.is_showing_captcha_alert = False
 
     def reset_buttons(self):
         self.btn_start.config(state="normal")

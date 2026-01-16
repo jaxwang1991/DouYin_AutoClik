@@ -34,7 +34,7 @@ class Config:
     SCREENSHOT_INTERVAL = 200  # every N likes
 
     # Captcha detection texts
-    CAPTCHA_TEXTS = ["请完成下列验证后继续", "向右滑动完成拼图", "旋转图片"]
+    CAPTCHA_TEXTS = ["请完成下列验证后继续", "向右滑动完成拼图", "旋转图片", "短信验证", "获取验证码"]
     CAPTCHA_SELECTORS = [".captcha_verify_container", "#captcha-verify-image", "[class*='captcha']"]
 
     # Live end detection texts
