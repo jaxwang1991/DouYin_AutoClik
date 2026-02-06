@@ -213,15 +213,33 @@ class App:
                     config = json.load(f)
                     if "url" in config:
                         self.url_var.set(config["url"])
-                    # Load other settings if needed in future
+                    if "ai_api_key" in config:
+                        self.ai_key_var.set(config["ai_api_key"])
+                    if "ai_prompt" in config:
+                        self.ai_prompt_text.delete("1.0", "end")
+                        self.ai_prompt_text.insert("1.0", config["ai_prompt"])
             except Exception as e:
                 self.append_log(f"加载配置文件失败: {e}")
 
     def save_ui_config(self):
         """Save UI configuration to file"""
+        # Get values
+        current_api_key = self.ai_key_var.get().strip()
+        current_prompt = self.ai_prompt_text.get("1.0", "end-1c")
+        
+        # Determine if we should save AI config (only if not default placeholder)
+        ai_config = {}
+        if current_api_key and current_api_key != "YOUR_API_KEY_HERE":
+            ai_config["ai_api_key"] = current_api_key
+        
+        if current_prompt:
+            ai_config["ai_prompt"] = current_prompt
+
         config = {
-            "url": self.url_var.get().strip()
+            "url": self.url_var.get().strip(),
+            **ai_config
         }
+        
         try:
             with open("config.json", "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=4, ensure_ascii=False)
