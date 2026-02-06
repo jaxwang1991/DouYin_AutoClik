@@ -1,2 +1,6 @@
 playwright
 openai
+soundcard
+soundfile
+numpy
+dashscope

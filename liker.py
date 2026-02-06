@@ -7,6 +7,7 @@ import os
 import time
 import base64
 import difflib
+from audio_handler import AudioHandler
 from openai import AsyncOpenAI
 from base import BrowserBase
 from config import Config, DEFAULT_CONFIG
@@ -30,9 +31,9 @@ class DouYinLiker(BrowserBase):
         # AI State
         self.last_comment_time = 0
         self.ai_client = None
-        self.history_file = None
-        self.comment_history = []
-        self.rejected_history = []  # Store recently rejected comments
+        
+        # Audio Handler
+        self.audio_handler = None
 
         # Runtime state
         self.total_likes = 0
@@ -73,15 +74,12 @@ class DouYinLiker(BrowserBase):
                     base_url=Config.AI_BASE_URL
                 )
                 
-                # Setup history file
-                if not os.path.exists(Config.AI_HISTORY_DIR):
-                    os.makedirs(Config.AI_HISTORY_DIR)
+                self.log(f"AI 评论功能已开启")
                 
-                ts = time.strftime("%Y%m%d_%H%M%S")
-                self.history_file = os.path.join(Config.AI_HISTORY_DIR, f"comments_{ts}.txt")
-                self.comment_history = []
-                self.rejected_history = []
-                self.log(f"AI 评论功能已开启 (记录文件: {self.history_file})")
+                # Setup Audio Handler
+                if self.config.get("ai_use_audio", Config.AI_USE_AUDIO):
+                    self.audio_handler = AudioHandler(log_callback=self.log)
+                    self.audio_handler.start_recording()
                 
             except Exception as e:
                 self.log(f"AI 初始化失败: {e}")
@@ -97,17 +95,11 @@ class DouYinLiker(BrowserBase):
     async def stop(self):
         self.should_stop = True
         self.state = "STOPPING"
+        if self.audio_handler:
+            self.audio_handler.stop_and_save()
         self.update_stats()
         await self.close()
         
-        # Cleanup history file
-        if self.history_file and os.path.exists(self.history_file):
-            try:
-                os.remove(self.history_file)
-                self.log(f"已清理临时历史文件: {self.history_file}")
-            except Exception as e:
-                self.log(f"清理历史文件失败: {e}")
-                
         self.is_running = False
         self.state = "STOPPED"
         self.log("任务已停止")
@@ -394,99 +386,74 @@ class DouYinLiker(BrowserBase):
         ts = time.strftime("%H-%M-%S")
         asyncio.create_task(self.page.screenshot(path=f"{Config.SCREENSHOT_DIR}/auto_{ts}.png"))
 
-    def _is_duplicate(self, new_comment, history, threshold=None):
-        """Check for duplicate comments using fuzzy matching"""
-        if not history:
-            return False
-            
-        if threshold is None:
-            threshold = Config.AI_SIMILARITY_THRESHOLD
-            
-        # First check exact match (faster)
-        if new_comment in history:
-            return True
-            
-        # Check fuzzy match
-        # Only check recent history to save performance
-        for old_comment in history[-Config.AI_MAX_HISTORY_ITEMS:]:
-            ratio = difflib.SequenceMatcher(None, new_comment, old_comment).ratio()
-            if ratio > threshold:
-                self.log(f"[AI] 发现相似评论 (相似度 {ratio:.2f}): '{new_comment}' vs '{old_comment}'")
-                return True
-                
-        return False
-
-    async def _process_ai_comment(self, retry_count=0):
+    async def _process_ai_comment(self):
         """Process AI comment generation and sending"""
         now = time.time()
         interval = self.config.get("ai_interval", Config.AI_COMMENT_INTERVAL)
         
-        # Only check interval if not retrying
-        if retry_count == 0 and now - self.last_comment_time < interval:
+        if now - self.last_comment_time < interval:
             return
 
-        if retry_count == 0:
-            self.last_comment_time = now  # Reset timer immediately to avoid double firing
+        self.last_comment_time = now
         
         try:
-            if retry_count == 0:
-                self.log("[AI] 正在截取直播画面...")
-                # Screenshot buffer (base64) - captures only the viewport
-                screenshot_bytes = await self.page.screenshot(type="jpeg", quality=50)
-                # Save screenshot bytes to instance to reuse in retry
-                self._current_screenshot_b64 = base64.b64encode(screenshot_bytes).decode('utf-8')
-            
-            b64_image = getattr(self, '_current_screenshot_b64', None)
-            if not b64_image:
-                 # Fallback if retry called without screenshot (shouldn't happen)
-                 screenshot_bytes = await self.page.screenshot(type="jpeg", quality=50)
-                 b64_image = base64.b64encode(screenshot_bytes).decode('utf-8')
+            self.log("[AI] 正在截取直播画面...")
+            # Screenshot buffer (base64) - captures only the viewport
+            screenshot_bytes = await self.page.screenshot(type="jpeg", quality=50)
+            b64_image = base64.b64encode(screenshot_bytes).decode('utf-8')
 
-            self.log(f"[AI] 正在请求大模型生成评论... (尝试 {retry_count + 1})")
+            self.log(f"[AI] 正在请求大模型生成评论...")
             
-            # Build prompt with history
-            # Use GUI config if available, fallback to default
+            # 1. Base System Prompt from GUI
             base_prompt = self.config.get("ai_prompt") or Config.AI_PROMPT
-            
             system_content = base_prompt
             
-            # 1. Add History
-            if self.comment_history:
-                # 获取最近的 N 条历史
-                recent_history = self.comment_history[-Config.AI_MAX_HISTORY_ITEMS:]
-                history_list = "\n".join([f"- {c}" for c in recent_history])
-                
-                # Append history strict requirement at the end for recency bias
-                system_content += f"\n\n【历史已发送记录】\n{history_list}"
-
-            # 2. Add Rejected History (Critical for breaking loops)
-            if self.rejected_history:
-                rejected_list = "\n".join([f"- {c}" for c in self.rejected_history[-10:]]) # Last 10 rejected
-                system_content += f"\n\n【最近被拦截的重复尝试】(AI刚才生成的这些内容因为重复被系统拦截，请绝对避免再次生成类似内容)\n{rejected_list}"
-
-            # 3. Add Final Strict Instructions
-            system_content += "\n\n【最高优先级指令】\n1. 请检查【历史已发送记录】和【最近被拦截的重复尝试】。\n2. 你生成的评论必须与列表中的任何一条内容都不同。\n3. 严禁生成语义相似或句式雷同的评论。\n4. 如果生成重复内容将被视为任务失败。"
+            # Prepare messages
+            messages = [
+                {
+                    "role": "system",
+                    "content": system_content
+                }
+            ]
             
+            # Handle Audio Transcription
+            if self.audio_handler:
+                try:
+                    # Stop current recording, save, and restart immediately for next cycle
+                    audio_file = self.audio_handler.stop_and_save()
+                    self.audio_handler.start_recording()  # Start recording next segment immediately
+                    
+                    if audio_file:
+                        api_key = self.config.get("ai_api_key") or Config.AI_API_KEY
+                        transcript = await self.audio_handler.transcribe(audio_file, api_key)
+                        
+                        # Save transcript
+                        self.audio_handler.save_transcript(transcript)
+                        
+                        if transcript:
+                            # Update system content with transcript context
+                            messages[0]["content"] += f"\n\n【参考信息】\n当前直播间语音转录：{transcript}"
+                            
+                except Exception as e:
+                    self.log(f"[Audio] 音频处理失败: {e}")
+            
+            # Add user message with image
+            messages.append({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "结合画面和语音内容，生成一句评论。"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64_image}"
+                        }
+                    }
+                ]
+            })
+
             response = await self.ai_client.chat.completions.create(
                 model=Config.AI_MODEL,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": system_content
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "这是当前的直播画面，请生成一句评论。"},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{b64_image}"
-                                }
-                            }
-                        ]
-                    }
-                ],
+                messages=messages,
                 max_tokens=100,
                 temperature=Config.AI_TEMPERATURE  # High temperature for diversity
             )
@@ -495,31 +462,6 @@ class DouYinLiker(BrowserBase):
             self.log(f"[AI] 生成评论: {comment}")
             
             if comment:
-                # Local duplication check (Fuzzy)
-                if self._is_duplicate(comment, self.comment_history):
-                    self.log(f"[AI] 警告: 检测到重复/相似评论: {comment}")
-                    
-                    # Record rejection
-                    self.rejected_history.append(comment)
-                    
-                    # Retry logic
-                    if retry_count < 1:
-                        self.log(f"[AI] 正在尝试重新生成 (Retry 1/1)...")
-                        await asyncio.sleep(2) # Brief pause
-                        await self._process_ai_comment(retry_count=1)
-                    else:
-                        self.log(f"[AI] 重试次数耗尽，跳过本次发送。")
-                    
-                    return
-
-                # Save to history
-                self.comment_history.append(comment)
-                try:
-                    with open(self.history_file, "a", encoding="utf-8") as f:
-                        f.write(f"{time.strftime('%H:%M:%S')} - {comment}\n")
-                except Exception as ex:
-                    self.log(f"[AI] 保存历史记录失败: {ex}")
-
                 await self._send_comment(comment)
                 
         except Exception as e:

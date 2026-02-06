@@ -54,9 +54,8 @@ class Config:
     AI_MODEL = "qwen3-omni-flash-2025-12-01"
     AI_COMMENT_INTERVAL = 60  # seconds
     AI_HISTORY_DIR = "logs/history"
-    AI_MAX_HISTORY_ITEMS = 50
     AI_TEMPERATURE = 1.0  # Higher value = more creative/random (0.0 - 2.0)
-    AI_SIMILARITY_THRESHOLD = 0.7  # 0.7 means 70% similar is considered duplicate
+    AI_USE_AUDIO = True  # Enable audio recording and transcription for context
     
     # AI System Prompt
     AI_PROMPT = """你是一个热情的直播间观众。

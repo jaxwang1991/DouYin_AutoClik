@@ -183,6 +183,8 @@ class App:
         if state_text == "STOPPED":
             self.root.after(0, self.reset_buttons)
             self.is_showing_captcha_alert = False # 重置标志
+            # Check for cleanup
+            self.root.after(100, self.prompt_cleanup)
             
     def _show_captcha_alert(self):
         messagebox.showwarning(
@@ -196,6 +198,25 @@ class App:
         self.btn_stop.config(state="disabled")
         self.btn_pause.config(state="disabled")
         self.btn_resume.config(state="disabled")
+
+    def prompt_cleanup(self):
+        """Prompt user to clean up audio and transcript files"""
+        if not hasattr(self.liker, 'audio_handler') or not self.liker.audio_handler:
+            return
+
+        handler = self.liker.audio_handler
+        
+        # Check if there are any files to clean
+        has_files = bool(handler.session_audio_files or handler.session_transcript_files)
+        
+        if has_files:
+            file_count = len(handler.session_audio_files) + len(handler.session_transcript_files)
+            if messagebox.askyesno("清理文件", f"本次任务生成了 {file_count} 个临时文件（音频/转录文本）。\n是否全部删除？"):
+                if handler.session_audio_files:
+                    handler.clear_audio_files()
+                if handler.session_transcript_files:
+                    handler.clear_transcript_files()
+                self.append_log("已清理所有临时文件")
 
     def run_login(self):
         # 调用 auth.py 脚本
