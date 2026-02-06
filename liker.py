@@ -5,6 +5,8 @@ import asyncio
 import random
 import os
 import time
+import base64
+from openai import AsyncOpenAI
 from base import BrowserBase
 from config import Config, DEFAULT_CONFIG
 
@@ -23,6 +25,12 @@ class DouYinLiker(BrowserBase):
         self.config = DEFAULT_CONFIG.copy()
         self.config["url"] = ""
         self.config["headless"] = True
+        
+        # AI State
+        self.last_comment_time = 0
+        self.ai_client = None
+        self.history_file = None
+        self.comment_history = []
 
         # Runtime state
         self.total_likes = 0
@@ -52,6 +60,30 @@ class DouYinLiker(BrowserBase):
         self.total_likes = 0
         self.update_stats()
 
+        # Initialize AI Client if enabled
+        if self.config.get("ai_enabled", False):
+            try:
+                # Use config values passed from GUI if available
+                api_key = self.config.get("ai_api_key") or Config.AI_API_KEY
+                
+                self.ai_client = AsyncOpenAI(
+                    api_key=api_key,
+                    base_url=Config.AI_BASE_URL
+                )
+                
+                # Setup history file
+                if not os.path.exists(Config.AI_HISTORY_DIR):
+                    os.makedirs(Config.AI_HISTORY_DIR)
+                
+                ts = time.strftime("%Y%m%d_%H%M%S")
+                self.history_file = os.path.join(Config.AI_HISTORY_DIR, f"comments_{ts}.txt")
+                self.comment_history = []
+                self.log(f"AI 评论功能已开启 (记录文件: {self.history_file})")
+                
+            except Exception as e:
+                self.log(f"AI 初始化失败: {e}")
+                self.config["ai_enabled"] = False
+
         try:
             await self._run()
         except Exception as e:
@@ -64,6 +96,15 @@ class DouYinLiker(BrowserBase):
         self.state = "STOPPING"
         self.update_stats()
         await self.close()
+        
+        # Cleanup history file
+        if self.history_file and os.path.exists(self.history_file):
+            try:
+                os.remove(self.history_file)
+                self.log(f"已清理临时历史文件: {self.history_file}")
+            except Exception as e:
+                self.log(f"清理历史文件失败: {e}")
+                
         self.is_running = False
         self.state = "STOPPED"
         self.log("任务已停止")
@@ -114,10 +155,22 @@ class DouYinLiker(BrowserBase):
             if self.config["cycle_mode"]:
                 if not self._handle_cycle_mode(current_time, cycle_start_time):
                     cycle_start_time = current_time
-                    continue
+                    # 即使在状态切换的瞬间，也要继续往下走，如果是RESTING状态会在下面被拦截
+                    # 但如果是刚切换回LIKING，应该继续执行
+                    if self.state == "RESTING":
+                        # 在休息状态下，也要检查直播是否结束
+                        if await self._check_live_end():
+                            break
+                        await self._show_rest_countdown(current_time, cycle_start_time)
+                        continue
+                    else:
+                        continue
 
             # Resting state - skip click
             if self.state == "RESTING":
+                # 在休息状态下，也要检查直播是否结束
+                if await self._check_live_end():
+                    break
                 await self._show_rest_countdown(current_time, cycle_start_time)
                 continue
 
@@ -131,6 +184,10 @@ class DouYinLiker(BrowserBase):
                     self.log("连续错误次数过多，自动停止")
                     break
                 await asyncio.sleep(1)
+
+            # Process AI Comment
+            if self.config.get("ai_enabled", False):
+                await self._process_ai_comment()
 
     async def _wait_for_video(self):
         """Wait for video element"""
@@ -327,3 +384,103 @@ class DouYinLiker(BrowserBase):
             os.makedirs(Config.SCREENSHOT_DIR)
         ts = time.strftime("%H-%M-%S")
         asyncio.create_task(self.page.screenshot(path=f"{Config.SCREENSHOT_DIR}/auto_{ts}.png"))
+
+    async def _process_ai_comment(self):
+        """Process AI comment generation and sending"""
+        now = time.time()
+        interval = self.config.get("ai_interval", Config.AI_COMMENT_INTERVAL)
+        
+        if now - self.last_comment_time < interval:
+            return
+
+        self.last_comment_time = now  # Reset timer immediately to avoid double firing
+        
+        try:
+            self.log("[AI] 正在截取直播画面...")
+            # Screenshot buffer (base64) - captures only the viewport
+            screenshot_bytes = await self.page.screenshot(type="jpeg", quality=50)
+            b64_image = base64.b64encode(screenshot_bytes).decode('utf-8')
+            
+            self.log("[AI] 正在请求大模型生成评论...")
+            
+            # Build prompt with history
+            # Use GUI config if available, fallback to default
+            base_prompt = self.config.get("ai_prompt") or Config.AI_PROMPT
+            
+            history_text = ""
+            if self.comment_history:
+                recent_history = self.comment_history[-Config.AI_MAX_HISTORY_ITEMS:]
+                history_list = "\n".join([f"- {c}" for c in recent_history])
+                history_text = f"\n\n【重要】以下是最近已生成的评论，请绝对避免生成与这些内容相似或雷同的评论：\n{history_list}"
+            
+            response = await self.ai_client.chat.completions.create(
+                model=Config.AI_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": base_prompt + history_text
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "这是当前的直播画面，请生成一句评论。"},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{b64_image}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=100
+            )
+            
+            comment = response.choices[0].message.content.strip()
+            self.log(f"[AI] 生成评论: {comment}")
+            
+            if comment:
+                # Save to history
+                self.comment_history.append(comment)
+                try:
+                    with open(self.history_file, "a", encoding="utf-8") as f:
+                        f.write(f"{time.strftime('%H:%M:%S')} - {comment}\n")
+                except Exception as ex:
+                    self.log(f"[AI] 保存历史记录失败: {ex}")
+
+                await self._send_comment(comment)
+                
+        except Exception as e:
+            self.log(f"[AI] 评论生成失败: {e}")
+
+    async def _send_comment(self, text):
+        """Send comment to chat"""
+        try:
+            # Try to find input box
+            input_box = None
+            selectors = [
+                "textarea[placeholder*='说点什么']",
+                "textarea[class*='webcast-chatroom']",
+                "[contenteditable='true']",
+                "input[placeholder*='说点什么']"
+            ]
+            
+            for sel in selectors:
+                try:
+                    if await self.page.locator(sel).first.is_visible():
+                        input_box = self.page.locator(sel).first
+                        break
+                except:
+                    continue
+            
+            if input_box:
+                await input_box.click()
+                await input_box.fill(text)
+                await asyncio.sleep(0.5)
+                await self.page.keyboard.press("Enter")
+                self.log(f"[AI] 评论已发送")
+            else:
+                self.log("[AI] 未找到评论输入框")
+                
+        except Exception as e:
+            self.log(f"[AI] 发送评论失败: {e}")

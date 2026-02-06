@@ -4,8 +4,11 @@ import threading
 import asyncio
 import os
 import sys
+import time
+import json
 import subprocess
 from liker import DouYinLiker
+from config import Config
 
 class App:
     def __init__(self, root):
@@ -27,6 +30,7 @@ class App:
         )
         
         self.setup_ui()
+        self.load_ui_config()
         
         # 检查登录状态
         if not os.path.exists("state.json"):
@@ -42,21 +46,32 @@ class App:
         style.configure("TLabel", font=("微软雅黑", 10))
         style.configure("TButton", font=("微软雅黑", 10))
         
-        # --- 1. 基础设置 ---
-        frame_basic = ttk.LabelFrame(self.root, text="基础设置", padding=10)
+        # 创建 Notebook
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # --- Tab 1: 基础配置 ---
+        self.tab_basic = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_basic, text="基础设置")
+        
+        # --- Tab 2: AI 智能评论 ---
+        self.tab_ai = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_ai, text="AI 智能评论")
+        
+        # ==================== Tab 1 内容 ====================
+        
+        # --- 1. 直播间设置 ---
+        frame_basic = ttk.LabelFrame(self.tab_basic, text="直播间设置", padding=10)
         frame_basic.pack(fill="x", padx=10, pady=5)
         
         ttk.Label(frame_basic, text="直播间链接:").grid(row=0, column=0, sticky="w")
         self.url_var = tk.StringVar()
         ttk.Entry(frame_basic, textvariable=self.url_var, width=50).grid(row=0, column=1, columnspan=2, padx=5)
         
-        self.headless_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frame_basic, text="后台静默运行 (不显示浏览器)", variable=self.headless_var).grid(row=1, column=0, columnspan=2, sticky="w", pady=5)
-        
-        ttk.Button(frame_basic, text="扫码登录", command=self.run_login).grid(row=1, column=2, sticky="e")
+        ttk.Button(frame_basic, text="扫码登录", command=self.run_login).grid(row=1, column=2, sticky="e", pady=5)
         
         # --- 2. 点赞频率 ---
-        frame_speed = ttk.LabelFrame(self.root, text="点赞频率 (秒)", padding=10)
+        frame_speed = ttk.LabelFrame(self.tab_basic, text="点赞频率 (秒)", padding=10)
         frame_speed.pack(fill="x", padx=10, pady=5)
         
         ttk.Label(frame_speed, text="快速连点间隔:").grid(row=0, column=0)
@@ -73,8 +88,8 @@ class App:
         ttk.Label(frame_speed, text="-").grid(row=0, column=6)
         ttk.Entry(frame_speed, textvariable=self.slow_max, width=5).grid(row=0, column=7)
 
-        # --- 3. 循环模式 (新功能) ---
-        frame_cycle = ttk.LabelFrame(self.root, text="循环休息模式 (防风控)", padding=10)
+        # --- 3. 循环模式 ---
+        frame_cycle = ttk.LabelFrame(self.tab_basic, text="循环休息模式 (防风控)", padding=10)
         frame_cycle.pack(fill="x", padx=10, pady=5)
         
         self.cycle_var = tk.BooleanVar(value=True)
@@ -87,6 +102,29 @@ class App:
         ttk.Label(frame_cycle, text="休息时长 (分钟):").grid(row=1, column=2, sticky="w")
         self.rest_min = tk.IntVar(value=5)
         ttk.Entry(frame_cycle, textvariable=self.rest_min, width=8).grid(row=1, column=3, sticky="w")
+        
+        # ==================== Tab 2 内容 (AI 配置) ====================
+        
+        frame_ai = ttk.LabelFrame(self.tab_ai, text="大模型配置", padding=10)
+        frame_ai.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        # API Key
+        ttk.Label(frame_ai, text="API Key:").grid(row=0, column=0, sticky="w", pady=5)
+        self.ai_key_var = tk.StringVar(value=Config.AI_API_KEY)
+        ttk.Entry(frame_ai, textvariable=self.ai_key_var, width=50).grid(row=0, column=1, sticky="w", padx=5)
+        
+        # 评论间隔
+        ttk.Label(frame_ai, text="评论循环时长 (秒):").grid(row=1, column=0, sticky="w", pady=5)
+        self.ai_interval_var = tk.IntVar(value=Config.AI_COMMENT_INTERVAL)
+        ttk.Entry(frame_ai, textvariable=self.ai_interval_var, width=10).grid(row=1, column=1, sticky="w", padx=5)
+        
+        # 提示词
+        ttk.Label(frame_ai, text="AI 系统提示词:").grid(row=2, column=0, sticky="nw", pady=5)
+        self.ai_prompt_text = scrolledtext.ScrolledText(frame_ai, height=10, width=50)
+        self.ai_prompt_text.grid(row=2, column=1, sticky="w", padx=5)
+        self.ai_prompt_text.insert("1.0", Config.AI_PROMPT)
+        
+        # ==================== 公共区域 ====================
         
         # --- 4. 运行日志 ---
         frame_log = ttk.LabelFrame(self.root, text="运行日志", padding=10)
@@ -126,8 +164,9 @@ class App:
         self.root.after(0, lambda: self._append_log_impl(msg))
         
     def _append_log_impl(self, msg):
+        timestamp = time.strftime("[%H:%M:%S] ")
         self.log_area.config(state='normal')
-        self.log_area.insert('end', msg + "\n")
+        self.log_area.insert('end', timestamp + msg + "\n")
         self.log_area.see('end')
         self.log_area.config(state='disabled')
         
@@ -166,11 +205,37 @@ class App:
         except Exception as e:
             messagebox.showerror("错误", f"无法启动登录脚本: {e}")
 
+    def load_ui_config(self):
+        """Load UI configuration from file"""
+        if os.path.exists("config.json"):
+            try:
+                with open("config.json", "r", encoding="utf-8") as f:
+                    config = json.load(f)
+                    if "url" in config:
+                        self.url_var.set(config["url"])
+                    # Load other settings if needed in future
+            except Exception as e:
+                self.append_log(f"加载配置文件失败: {e}")
+
+    def save_ui_config(self):
+        """Save UI configuration to file"""
+        config = {
+            "url": self.url_var.get().strip()
+        }
+        try:
+            with open("config.json", "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            self.append_log(f"保存配置文件失败: {e}")
+
     def start_task(self):
         url = self.url_var.get().strip()
         if not url:
             messagebox.showwarning("提示", "请输入直播间链接")
             return
+            
+        # Save config
+        self.save_ui_config()
             
         # 锁定按钮
         self.btn_start.config(state="disabled")
@@ -184,14 +249,19 @@ class App:
         # 收集配置
         config = {
             "url": url,
-            "headless": self.headless_var.get(),
+            "headless": False,  # 强制显示浏览器
             "fast_min": self.fast_min.get(),
             "fast_max": self.fast_max.get(),
             "slow_min": self.slow_min.get(),
             "slow_max": self.slow_max.get(),
             "cycle_mode": self.cycle_var.get(),
             "work_min": self.work_min.get(),
-            "rest_min": self.rest_min.get()
+            "rest_min": self.rest_min.get(),
+            
+            # AI Config from GUI
+            "ai_api_key": self.ai_key_var.get().strip(),
+            "ai_interval": self.ai_interval_var.get(),
+            "ai_prompt": self.ai_prompt_text.get("1.0", "end-1c")
         }
         
         # 提交到异步线程

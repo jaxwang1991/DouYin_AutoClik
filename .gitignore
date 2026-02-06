@@ -13,6 +13,7 @@ env/
 .vscode/
 .idea/
 *.code-workspace
+.trae/
 
 # 操作系统生成文件
 .DS_Store
@@ -24,10 +25,10 @@ logs/
 
 # 本地登录状态（包含敏感信息，禁止提交）
 state.json
+config.json
 
 # Windows 特殊设备名，避免被 Git 处理
 nul
 
 # Claude Code 临时文件
 tmpclaude-*-cwd
-

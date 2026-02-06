@@ -46,6 +46,22 @@ class Config:
     # State file
     STATE_FILE = "state.json"
 
+    # AI Comment Settings
+    AI_ENABLED = True
+    AI_PROVIDER = "dashscope"
+    AI_API_KEY = "YOUR_API_KEY_HERE"  # Replace with your actual key
+    AI_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    AI_MODEL = "qwen3-omni-flash-2025-12-01"
+    AI_COMMENT_INTERVAL = 60  # seconds
+    AI_HISTORY_DIR = "logs/history"
+    AI_MAX_HISTORY_ITEMS = 20
+    
+    # AI System Prompt
+    AI_PROMPT = """你是一个热情的直播间观众。
+请根据直播画面内容，生成一句简短的提问（40字以内）。
+提问内容必须围绕以下领域之一展开：当前直播间画面内容相关、兴隆咖啡相关领域，吉纳客公司相关，咖啡豆知识相关，速溶咖啡知识相关。
+风格要自然、活跃气氛。不要重复之前的话。"""
+
 
 # Default config for CLI (used by main.py)
 DEFAULT_CONFIG = {
@@ -57,4 +73,6 @@ DEFAULT_CONFIG = {
     "cycle_mode": False,
     "work_min": 10,
     "rest_min": 5,
+    "ai_enabled": Config.AI_ENABLED,
+    "ai_interval": Config.AI_COMMENT_INTERVAL,
 }
