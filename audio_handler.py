@@ -24,7 +24,7 @@ class AudioHandler:
         self.is_recording = False
         self.frames = []
         self.thread = None
-        self.sample_rate = 44100
+        self.sample_rate = 16000
         self._stop_event = threading.Event()
         
         # Track current session files for potential cleanup
