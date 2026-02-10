@@ -32,3 +32,20 @@ nul
 
 # Claude Code 临时文件
 tmpclaude-*-cwd
+.claude/
+
+# 项目特定文件
+data/
+build/
+*.spec
+
+# 配置向导生成的默认文件
+config.json.default
+
+# 临时脚本和示例
+API代码示例.py
+运行日志.txt
+
+# 用户文档
+CLAUDE.md
+README.txt
