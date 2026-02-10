@@ -52,8 +52,11 @@ class Config:
     AI_API_KEY = "YOUR_API_KEY_HERE"  # Replace with your actual key
     AI_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     AI_MODEL = "qwen3-omni-flash-2025-12-01"
-    AI_COMMENT_INTERVAL = 60  # seconds
+    AI_COMMENT_INTERVAL_MIN = 60  # minimum seconds between comments
+    AI_COMMENT_INTERVAL_MAX = 120  # maximum seconds between comments
+    AI_COMMENT_INTERVAL = 60  # seconds (legacy, for backward compatibility)
     AI_HISTORY_DIR = "logs/history"
+    AI_HISTORY_FILE = "comment_history.json"  # persistent comment history file
     AI_TEMPERATURE = 1.0  # Higher value = more creative/random (0.0 - 2.0)
     AI_USE_AUDIO = True  # Enable audio recording and transcription for context
     
@@ -121,3 +124,7 @@ except ImportError:
         if not os.path.exists(logs_path):
             os.makedirs(logs_path)
         return logs_path
+
+    def get_comment_history_path():
+        import os
+        return os.path.join(get_data_path(), Config.AI_HISTORY_FILE)

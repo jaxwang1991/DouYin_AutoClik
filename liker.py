@@ -7,6 +7,8 @@ import os
 import time
 import base64
 import difflib
+import re
+import json
 from audio_handler import AudioHandler
 from openai import AsyncOpenAI
 from base import BrowserBase
@@ -34,7 +36,8 @@ class DouYinLiker(BrowserBase):
         self.last_comment_time = 0
         self.ai_client = None
         self.comment_history = []  # Store recent comments to avoid duplicates
-        
+        self.next_comment_interval = 0  # Actual interval for current cycle (for display)
+
         # Audio Handler
         self.audio_handler = None
 
@@ -81,8 +84,16 @@ class DouYinLiker(BrowserBase):
         """Calculate time until next AI comment"""
         if not self.config.get("ai_enabled", False):
             return ""
-            
-        interval = self.config.get("ai_interval", Config.AI_COMMENT_INTERVAL)
+
+        # Use the actual interval for current cycle if set, otherwise get configured interval
+        if self.next_comment_interval > 0:
+            interval = self.next_comment_interval
+        else:
+            # Get interval from config (support both old and new format)
+            interval_min = self.config.get("ai_interval_min", Config.AI_COMMENT_INTERVAL_MIN)
+            interval_max = self.config.get("ai_interval_max", Config.AI_COMMENT_INTERVAL_MAX)
+            interval = interval_max  # Use max for countdown display
+
         elapsed = time.time() - self.last_comment_time
         remaining = max(0, int(interval - elapsed))
         return f"AI倒计时: {remaining}秒"
@@ -137,7 +148,10 @@ class DouYinLiker(BrowserBase):
         self.is_running = True
         self.state = "STARTING"
         self.total_likes = 0
-        self.comment_history = []  # Clear history on each task start
+
+        # Load comment history from file (don't clear, keep persistent history)
+        self._load_comment_history()
+
         self.update_stats()
 
         # Initialize AI Client if enabled
@@ -172,11 +186,16 @@ class DouYinLiker(BrowserBase):
     async def stop(self):
         self.should_stop = True
         self.state = "STOPPING"
+
+        # Save comment history before stopping
+        self._save_comment_history()
+
         if self.audio_handler:
             self.audio_handler.stop_and_save()
+
         self.update_stats()
         await self.close()
-        
+
         self.is_running = False
         self.state = "STOPPED"
         self.log("任务已停止")
@@ -514,30 +533,44 @@ class DouYinLiker(BrowserBase):
     async def _process_ai_comment(self):
         """Process AI comment generation and sending"""
         now = time.time()
-        interval = self.config.get("ai_interval", Config.AI_COMMENT_INTERVAL)
-        
-        if now - self.last_comment_time < interval:
+
+        # Check interval - use random interval between min and max
+        interval_min = self.config.get("ai_interval_min", Config.AI_COMMENT_INTERVAL_MIN)
+        interval_max = self.config.get("ai_interval_max", Config.AI_COMMENT_INTERVAL_MAX)
+
+        # Backward compatibility: if only ai_interval is set, use it
+        if "ai_interval" in self.config and "ai_interval_min" not in self.config:
+            interval_min = self.config.get("ai_interval", Config.AI_COMMENT_INTERVAL)
+            interval_max = interval_min
+
+        # For countdown display, use the current cycle's interval or max
+        if self.next_comment_interval > 0:
+            check_interval = self.next_comment_interval
+        else:
+            check_interval = interval_max
+
+        if now - self.last_comment_time < check_interval:
             return
 
+        # Set new random interval for next cycle
+        self.next_comment_interval = random.uniform(interval_min, interval_max)
         self.last_comment_time = now
-        
+
         try:
             self.log("[AI] 正在截取直播画面...")
             # Screenshot buffer (base64) - captures only the viewport
             screenshot_bytes = await self.page.screenshot(type="jpeg", quality=50)
             b64_image = base64.b64encode(screenshot_bytes).decode('utf-8')
 
-            # self.log(f"[AI] 正在请求大模型生成评论...")
-            
             # 1. Base System Prompt from GUI
             base_prompt = self.config.get("ai_prompt") or Config.AI_PROMPT
             system_content = base_prompt
-            
+
             # Add comment history to system prompt
             if self.comment_history:
-                history_str = "\n".join([f"- {c}" for c in self.comment_history[-5:]])
+                history_str = "\n".join([f"- {c}" for c in self.comment_history[-10:]])
                 system_content += f"\n\n【重要指令】\n请避开以下最近已生成的评论，不要重复：\n{history_str}"
-            
+
             # Prepare messages
             messages = [
                 {
@@ -545,28 +578,28 @@ class DouYinLiker(BrowserBase):
                     "content": system_content
                 }
             ]
-            
+
             # Handle Audio Transcription
             if self.audio_handler:
                 try:
                     # Stop current recording, save, and restart immediately for next cycle
                     audio_file = self.audio_handler.stop_and_save()
                     self.audio_handler.start_recording()  # Start recording next segment immediately
-                    
+
                     if audio_file:
                         api_key = self.config.get("ai_api_key") or Config.AI_API_KEY
                         transcript = await self.audio_handler.transcribe(audio_file, api_key)
-                        
+
                         # Save transcript
                         self.audio_handler.save_transcript(transcript)
-                        
+
                         if transcript:
                             # Update system content with transcript context
                             messages[0]["content"] += f"\n\n【参考信息】\n当前直播间语音转录：{transcript}"
-                            
+
                 except Exception as e:
                     self.log(f"[Audio] 音频处理失败: {e}")
-            
+
             # Add user message with image
             messages.append({
                 "role": "user",
@@ -582,8 +615,8 @@ class DouYinLiker(BrowserBase):
             })
 
             self.log(f"[AI] 准备就绪，正在请求大模型生成评论...")
-            
-            comment = None # Reset comment
+
+            comment = None  # Reset comment
             try:
                 response = await self.ai_client.chat.completions.create(
                     model=Config.AI_MODEL,
@@ -594,7 +627,7 @@ class DouYinLiker(BrowserBase):
                     stream_options={"include_usage": True},
                     modalities=["text"]
                 )
-                
+
                 full_content = []
                 async for chunk in response:
                     if chunk.choices:
@@ -615,19 +648,28 @@ class DouYinLiker(BrowserBase):
                 self.log("[AI] 生成的评论为空，跳过发送")
                 return
 
-            # Strict deduplication: check if comment already exists in history
+            # Enhanced deduplication: check both exact match and normalized match
+            normalized_comment = self._normalize_comment(comment)
+
+            # Check exact match
             if comment in self.comment_history:
-                self.log(f"[AI] 检测到重复评论（已存在于历史记录），跳过发送: {comment}")
+                self.log(f"[AI] 检测到重复评论（完全匹配），跳过发送: {comment}")
                 return
+
+            # Check normalized match (removes punctuation, spaces for fuzzy comparison)
+            for hist_comment in self.comment_history:
+                if self._normalize_comment(hist_comment) == normalized_comment:
+                    self.log(f"[AI] 检测到重复评论（相似匹配），跳过发送: {comment} (相似于: {hist_comment})")
+                    return
 
             self.log(f"[AI] 评论生成成功: {comment}")
             self.comment_history.append(comment)
             # Keep history size manageable
-            if len(self.comment_history) > 20:
-                self.comment_history.pop(0)
+            if len(self.comment_history) > 50:
+                self.comment_history = self.comment_history[-50:]
 
             await self._send_comment(comment)
-                
+
         except Exception as e:
             self.log(f"[AI] 评论生成流程异常: {e}")
 
@@ -662,3 +704,50 @@ class DouYinLiker(BrowserBase):
                 
         except Exception as e:
             self.log(f"[AI] 发送评论失败: {e}")
+
+    def _normalize_comment(self, text):
+        """Normalize comment text for deduplication comparison.
+
+        Removes punctuation, extra whitespace, and converts to lowercase
+        for fuzzy matching of similar comments.
+        """
+        # Remove common punctuation and spaces, convert to lowercase
+        normalized = re.sub(r'[^\w]', '', text.strip()).lower()
+        return normalized
+
+    def _get_comment_history_path(self):
+        """Get the path to the comment history file."""
+        if Config.USE_BUILD_CONFIG:
+            from build_config import get_comment_history_path
+            return get_comment_history_path()
+        else:
+            return os.path.join(os.path.dirname(os.path.abspath(__file__)), Config.AI_HISTORY_FILE)
+
+    def _load_comment_history(self):
+        """Load comment history from file."""
+        try:
+            history_path = self._get_comment_history_path()
+            if os.path.exists(history_path):
+                with open(history_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.comment_history = data.get("comments", [])
+                    self.log(f"[AI] 已加载 {len(self.comment_history)} 条历史评论")
+            else:
+                self.comment_history = []
+        except Exception as e:
+            self.log(f"[AI] 加载评论历史失败: {e}")
+            self.comment_history = []
+
+    def _save_comment_history(self):
+        """Save comment history to file."""
+        try:
+            history_path = self._get_comment_history_path()
+            os.makedirs(os.path.dirname(history_path), exist_ok=True)
+            with open(history_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "comments": self.comment_history,
+                    "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")
+                }, f, indent=2, ensure_ascii=False)
+            self.log(f"[AI] 已保存 {len(self.comment_history)} 条历史评论")
+        except Exception as e:
+            self.log(f"[AI] 保存评论历史失败: {e}")

@@ -142,11 +142,17 @@ class App:
         ttk.Label(frame_ai, text="API Key:").grid(row=0, column=0, sticky="w", pady=5)
         self.ai_key_var = tk.StringVar(value=Config.AI_API_KEY)
         ttk.Entry(frame_ai, textvariable=self.ai_key_var, width=50).grid(row=0, column=1, sticky="w", padx=5)
-        
-        # 评论间隔
+
+        # 评论间隔 (双输入框: 最小值 - 最大值)
         ttk.Label(frame_ai, text="评论循环时长 (秒):").grid(row=1, column=0, sticky="w", pady=5)
-        self.ai_interval_var = tk.IntVar(value=Config.AI_COMMENT_INTERVAL)
-        ttk.Entry(frame_ai, textvariable=self.ai_interval_var, width=10).grid(row=1, column=1, sticky="w", padx=5)
+        # 创建输入框容器，使两个输入框紧密排列
+        interval_frame = ttk.Frame(frame_ai)
+        interval_frame.grid(row=1, column=1, sticky="w", padx=5)
+        self.ai_interval_min_var = tk.IntVar(value=Config.AI_COMMENT_INTERVAL_MIN)
+        self.ai_interval_max_var = tk.IntVar(value=Config.AI_COMMENT_INTERVAL_MAX)
+        ttk.Entry(interval_frame, textvariable=self.ai_interval_min_var, width=8).pack(side="left")
+        ttk.Label(interval_frame, text="-").pack(side="left", padx=2)
+        ttk.Entry(interval_frame, textvariable=self.ai_interval_max_var, width=8).pack(side="left")
         
         # 提示词
         ttk.Label(frame_ai, text="AI 系统提示词:").grid(row=2, column=0, sticky="nw", pady=5)
@@ -159,9 +165,12 @@ class App:
         # --- 4. 运行日志 ---
         frame_log = ttk.LabelFrame(self.root, text="运行日志", padding=10)
         frame_log.pack(fill="both", expand=True, padx=10, pady=5)
-        
+
         self.log_area = scrolledtext.ScrolledText(frame_log, height=15, state='disabled')
         self.log_area.pack(fill="both", expand=True)
+
+        # Log buffer for saving to file
+        self.log_buffer = []
         
         # --- 5. 底部控制栏 ---
         frame_ctrl = ttk.Frame(self.root, padding=10)
@@ -207,9 +216,20 @@ class App:
         self.root.after(0, lambda: self._append_log_impl(msg))
         
     def _append_log_impl(self, msg):
-        timestamp = time.strftime("[%H:%M:%S] ")
+        # Full timestamp for log file
+        full_timestamp = time.strftime("[%Y-%m-%d %H:%M:%S] ")
+        # Short timestamp for display
+        short_timestamp = time.strftime("[%H:%M:%S] ")
+
+        log_line = full_timestamp + msg + "\n"
+        display_line = short_timestamp + msg + "\n"
+
+        # Add to buffer for saving
+        self.log_buffer.append(log_line)
+
+        # Display on screen
         self.log_area.config(state='normal')
-        self.log_area.insert('end', timestamp + msg + "\n")
+        self.log_area.insert('end', display_line)
         self.log_area.see('end')
         self.log_area.config(state='disabled')
         
@@ -296,6 +316,16 @@ class App:
                     if "ai_prompt" in config:
                         self.ai_prompt_text.delete("1.0", "end")
                         self.ai_prompt_text.insert("1.0", config["ai_prompt"])
+                    # Support new interval format
+                    if "ai_interval_min" in config:
+                        self.ai_interval_min_var.set(config["ai_interval_min"])
+                    if "ai_interval_max" in config:
+                        self.ai_interval_max_var.set(config["ai_interval_max"])
+                    # Backward compatibility: if old ai_interval exists, use it for both
+                    elif "ai_interval" in config:
+                        interval = config["ai_interval"]
+                        self.ai_interval_min_var.set(interval)
+                        self.ai_interval_max_var.set(interval)
             except Exception as e:
                 self.append_log(f"Failed to load config file: {e}")
 
@@ -346,6 +376,9 @@ class App:
         self.log_area.delete(1.0, 'end')
         self.log_area.config(state='disabled')
 
+        # Clear log buffer for new task
+        self.log_buffer = []
+
         # 收集配置
         config = {
             "url": url,
@@ -360,7 +393,8 @@ class App:
 
             # AI Config from GUI
             "ai_api_key": self.ai_key_var.get().strip(),
-            "ai_interval": self.ai_interval_var.get(),
+            "ai_interval_min": self.ai_interval_min_var.get(),
+            "ai_interval_max": self.ai_interval_max_var.get(),
             "ai_prompt": self.ai_prompt_text.get("1.0", "end-1c")
         }
 
@@ -375,6 +409,34 @@ class App:
         self.btn_resume_comment.config(state="disabled")
         self.append_log("正在请求停止...")
         asyncio.run_coroutine_threadsafe(self.liker.stop(), self.loop)
+
+        # Save log after a short delay to ensure all logs are captured
+        self.root.after(2000, self.save_task_log)
+
+    def save_task_log(self):
+        """Save task log to file"""
+        if not self.log_buffer:
+            return
+
+        try:
+            # Get logs path
+            if Config.USE_BUILD_CONFIG:
+                from build_config import get_logs_path
+                logs_path = get_logs_path()
+            else:
+                logs_path = os.path.join(get_data_path(), "logs")
+
+            # Create filename with timestamp
+            filename = time.strftime("task_%Y%m%d_%H%M%S.log")
+            filepath = os.path.join(logs_path, filename)
+
+            # Write log buffer to file
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.writelines(self.log_buffer)
+
+            self.append_log(f"日志已保存至: {filepath}")
+        except Exception as e:
+            self.append_log(f"保存日志失败: {e}")
 
     def pause_like_task(self):
         self.btn_pause_like.config(state="disabled")
