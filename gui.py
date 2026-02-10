@@ -35,7 +35,7 @@ class App:
     def __init__(self, root):
         self.root = root
         self.root.title("DouYin AutoLiker v2.0")
-        self.root.geometry("600x750")
+        self.root.geometry("600x780")
 
         # Ensure config file exists (create default on first run)
         config_path = get_config_path()
@@ -166,28 +166,41 @@ class App:
         # --- 5. 底部控制栏 ---
         frame_ctrl = ttk.Frame(self.root, padding=10)
         frame_ctrl.pack(fill="x")
-        
-        # 使用 grid 布局来分行显示
+
         # 第一行：状态栏
         self.status_var = tk.StringVar(value="状态: 就绪 | 累计点赞: 0")
         lbl_status = ttk.Label(frame_ctrl, textvariable=self.status_var, foreground="blue")
-        lbl_status.grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
-        
-        # 第二行：按钮组 (使用一个子Frame来居中或右对齐按钮)
-        frame_btns = ttk.Frame(frame_ctrl)
-        frame_btns.grid(row=1, column=0, columnspan=4, sticky="e")
-        
-        self.btn_start = ttk.Button(frame_btns, text="开始任务", command=self.start_task)
+        lbl_status.grid(row=0, column=0, sticky="w", pady=(0, 10))
+
+        # 第二行：主任务控制
+        frame_main = ttk.Frame(frame_ctrl)
+        frame_main.grid(row=1, column=0, pady=5)
+
+        self.btn_start = ttk.Button(frame_main, text="开始任务", command=self.start_task)
         self.btn_start.pack(side="left", padx=5)
 
-        self.btn_pause = ttk.Button(frame_btns, text="暂停", command=self.pause_task, state="disabled")
-        self.btn_pause.pack(side="left", padx=5)
-
-        self.btn_resume = ttk.Button(frame_btns, text="恢复", command=self.resume_task, state="disabled")
-        self.btn_resume.pack(side="left", padx=5)
-        
-        self.btn_stop = ttk.Button(frame_btns, text="停止任务", command=self.stop_task, state="disabled")
+        self.btn_stop = ttk.Button(frame_main, text="停止任务", command=self.stop_task, state="disabled")
         self.btn_stop.pack(side="left", padx=5)
+
+        # 第三行：点赞控制
+        frame_like = ttk.Frame(frame_ctrl)
+        frame_like.grid(row=2, column=0, pady=5)
+
+        self.btn_pause_like = ttk.Button(frame_like, text="暂停点赞", command=self.pause_like_task, state="disabled")
+        self.btn_pause_like.pack(side="left", padx=5)
+
+        self.btn_resume_like = ttk.Button(frame_like, text="恢复点赞", command=self.resume_like_task, state="disabled")
+        self.btn_resume_like.pack(side="left", padx=5)
+
+        # 第四行：评论控制
+        frame_comment = ttk.Frame(frame_ctrl)
+        frame_comment.grid(row=3, column=0, pady=5)
+
+        self.btn_pause_comment = ttk.Button(frame_comment, text="暂停评论", command=self.pause_comment_task, state="disabled")
+        self.btn_pause_comment.pack(side="left", padx=5)
+
+        self.btn_resume_comment = ttk.Button(frame_comment, text="恢复评论", command=self.resume_comment_task, state="disabled")
+        self.btn_resume_comment.pack(side="left", padx=5)
 
     def append_log(self, msg):
         # 线程安全更新UI
@@ -226,8 +239,10 @@ class App:
     def reset_buttons(self):
         self.btn_start.config(state="normal")
         self.btn_stop.config(state="disabled")
-        self.btn_pause.config(state="disabled")
-        self.btn_resume.config(state="disabled")
+        self.btn_pause_like.config(state="disabled")
+        self.btn_resume_like.config(state="disabled")
+        self.btn_pause_comment.config(state="disabled")
+        self.btn_resume_comment.config(state="disabled")
 
     def prompt_cleanup(self):
         """Prompt user to clean up audio and transcript files"""
@@ -316,19 +331,21 @@ class App:
         if not url:
             messagebox.showwarning("提示", "请输入直播间链接")
             return
-            
+
         # Save config
         self.save_ui_config()
-            
+
         # 锁定按钮
         self.btn_start.config(state="disabled")
         self.btn_stop.config(state="normal")
-        self.btn_pause.config(state="normal")
-        self.btn_resume.config(state="disabled")
+        self.btn_pause_like.config(state="normal")
+        self.btn_resume_like.config(state="disabled")
+        self.btn_pause_comment.config(state="normal")
+        self.btn_resume_comment.config(state="disabled")
         self.log_area.config(state='normal')
         self.log_area.delete(1.0, 'end')
         self.log_area.config(state='disabled')
-        
+
         # 收集配置
         config = {
             "url": url,
@@ -340,32 +357,44 @@ class App:
             "cycle_mode": self.cycle_var.get(),
             "work_min": self.work_min.get(),
             "rest_min": self.rest_min.get(),
-            
+
             # AI Config from GUI
             "ai_api_key": self.ai_key_var.get().strip(),
             "ai_interval": self.ai_interval_var.get(),
             "ai_prompt": self.ai_prompt_text.get("1.0", "end-1c")
         }
-        
+
         # 提交到异步线程
         asyncio.run_coroutine_threadsafe(self.liker.start(config), self.loop)
 
     def stop_task(self):
         self.btn_stop.config(state="disabled")
-        self.btn_pause.config(state="disabled")
-        self.btn_resume.config(state="disabled")
+        self.btn_pause_like.config(state="disabled")
+        self.btn_resume_like.config(state="disabled")
+        self.btn_pause_comment.config(state="disabled")
+        self.btn_resume_comment.config(state="disabled")
         self.append_log("正在请求停止...")
         asyncio.run_coroutine_threadsafe(self.liker.stop(), self.loop)
 
-    def pause_task(self):
-        self.btn_pause.config(state="disabled")
-        self.btn_resume.config(state="normal")
-        self.liker.pause()
+    def pause_like_task(self):
+        self.btn_pause_like.config(state="disabled")
+        self.btn_resume_like.config(state="normal")
+        self.liker.pause_like()
 
-    def resume_task(self):
-        self.btn_resume.config(state="disabled")
-        self.btn_pause.config(state="normal")
-        self.liker.resume()
+    def resume_like_task(self):
+        self.btn_resume_like.config(state="disabled")
+        self.btn_pause_like.config(state="normal")
+        self.liker.resume_like()
+
+    def pause_comment_task(self):
+        self.btn_pause_comment.config(state="disabled")
+        self.btn_resume_comment.config(state="normal")
+        self.liker.pause_comment()
+
+    def resume_comment_task(self):
+        self.btn_resume_comment.config(state="disabled")
+        self.btn_pause_comment.config(state="normal")
+        self.liker.resume_comment()
 
 if __name__ == "__main__":
     root = tk.Tk()

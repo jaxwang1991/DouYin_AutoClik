@@ -21,7 +21,9 @@ class DouYinLiker(BrowserBase):
         self.status_callback = status_callback
         self.is_running = False
         self.should_stop = False
-        self.manual_pause = False
+        self.manual_pause = False  # 保留用于兼容性，作为"总暂停"
+        self.manual_pause_like = False  # 独立控制点赞
+        self.manual_pause_comment = False  # 独立控制评论
 
         # Config with defaults
         self.config = DEFAULT_CONFIG.copy()
@@ -43,9 +45,36 @@ class DouYinLiker(BrowserBase):
     def update_stats(self):
         if self.status_callback:
             state_text = self.state
+
+            # Add like status
+            if self.manual_pause_like:
+                like_status = "暂停"
+            elif self.state == "COOLDOWN":
+                like_status = "冷却中"
+            elif self.state == "RESTING":
+                like_status = "休息中"
+            elif self.state == "PAUSED_FOR_CAPTCHA":
+                like_status = "验证码等待"
+            elif self.state == "LIKING":
+                like_status = "运行中"
+            else:
+                like_status = "待机"
+
+            # Add comment status
+            if not self.config.get("ai_enabled", False):
+                comment_status = "未启用"
+            elif self.manual_pause_comment:
+                comment_status = "暂停"
+            else:
+                comment_status = "运行中"
+
+            # Add AI countdown if enabled
             if self.config.get("ai_enabled", False):
                 countdown = self._get_next_comment_countdown()
-                state_text += f" | {countdown}"
+                state_text = f"{self.state} | 点赞: {like_status} | 评论: {comment_status} | {countdown}"
+            else:
+                state_text = f"{self.state} | 点赞: {like_status}"
+
             self.status_callback(self.total_likes, state_text)
 
     def _get_next_comment_countdown(self):
@@ -59,15 +88,47 @@ class DouYinLiker(BrowserBase):
         return f"AI倒计时: {remaining}秒"
 
     def pause(self):
+        """总暂停 - 同时暂停点赞和评论"""
         self.manual_pause = True
+        self.manual_pause_like = True
+        self.manual_pause_comment = True
         self.state = "PAUSED_BY_USER"
-        self.log("用户已暂停")
+        self.log("用户已暂停 (点赞+评论)")
         self.update_stats()
 
     def resume(self):
+        """总恢复 - 同时恢复点赞和评论"""
         self.manual_pause = False
+        self.manual_pause_like = False
+        self.manual_pause_comment = False
         self.state = "LIKING"
-        self.log("任务已恢复")
+        self.log("任务已恢复 (点赞+评论)")
+        self.update_stats()
+
+    def pause_like(self):
+        """仅暂停点赞"""
+        self.manual_pause_like = True
+        self.log("点赞已暂停 (评论继续运行)")
+        self.update_stats()
+
+    def resume_like(self):
+        """仅恢复点赞"""
+        self.manual_pause_like = False
+        if not self.manual_pause_comment:
+            self.state = "LIKING"
+        self.log("点赞已恢复")
+        self.update_stats()
+
+    def pause_comment(self):
+        """仅暂停评论"""
+        self.manual_pause_comment = True
+        self.log("评论已暂停 (点赞继续运行)")
+        self.update_stats()
+
+    def resume_comment(self):
+        """仅恢复评论"""
+        self.manual_pause_comment = False
+        self.log("评论已恢复")
         self.update_stats()
 
     async def start(self, config):
@@ -142,6 +203,10 @@ class DouYinLiker(BrowserBase):
         click_errors = 0
         last_update_time = 0
 
+        # Speed limit state (affects only likes, not comments)
+        speed_limit_cooldown = False
+        speed_limit_end_time = 0
+
         while not self.should_stop:
             current_time = time.time()
 
@@ -150,50 +215,65 @@ class DouYinLiker(BrowserBase):
                 self.update_stats()
                 last_update_time = current_time
 
-            # Check manual pause
+            # Check total manual pause (both like and comment)
             if self.manual_pause:
                 self.state = "PAUSED_BY_USER"
                 await asyncio.sleep(0.5)
                 continue
 
-            # Check captcha
+            # Check captcha (pauses both like and comment)
             if await self._check_captcha():
-                continue
-
-            # Check speed limit
-            if await self._check_speed_limit():
                 continue
 
             # Check live end
             if await self._check_live_end():
                 break
 
-            # Cycle mode (work/rest)
+            # Handle speed limit (affects only likes, not comments)
+            if speed_limit_cooldown:
+                if current_time >= speed_limit_end_time:
+                    speed_limit_cooldown = False
+                    self.log("冷却结束，恢复点赞...")
+                    if not self.manual_pause_like:
+                        self.state = "LIKING"
+                else:
+                    remaining = int(speed_limit_end_time - current_time)
+                    if self.status_callback:
+                        self.status_callback(self.total_likes, f"冷却中({remaining}s)")
+                    await asyncio.sleep(1)
+                    # Continue to check speed limit again, but don't skip AI comment
+            else:
+                # Check for new speed limit
+                if await self._check_speed_limit_inline():
+                    speed_limit_cooldown = True
+                    speed_limit_end_time = current_time + Config.COOLDOWN_SECONDS
+                    self.log(f"检测到手速限制，冷却 {Config.COOLDOWN_SECONDS} 秒...")
+                    self.state = "COOLDOWN"
+                    await asyncio.sleep(1)
+                    # Don't skip AI comment processing
+
+            # Cycle mode (work/rest) - affects only likes
             if self.config["cycle_mode"]:
                 if not self._handle_cycle_mode(current_time, cycle_start_time):
                     cycle_start_time = current_time
-                    # 即使在状态切换的瞬间，也要继续往下走，如果是RESTING状态会在下面被拦截
-                    # 但如果是刚切换回LIKING，应该继续执行
                     if self.state == "RESTING":
-                        # 在休息状态下，也要检查直播是否结束
                         if await self._check_live_end():
                             break
                         await self._show_rest_countdown(current_time, cycle_start_time)
-                        # 不要 continue，让它继续往下执行 AI 逻辑
-                        # continue 
                     else:
-                        pass # 继续执行
+                        pass
 
-            # Resting state - skip click
+            # Resting state - skip click but allow AI comment
             if self.state == "RESTING":
-                # 在休息状态下，也要检查直播是否结束
                 if await self._check_live_end():
                     break
                 await self._show_rest_countdown(current_time, cycle_start_time)
-                # continue # 移除 continue，以便执行后续的 AI 逻辑
 
-            # Execute click
-            if self.state == "LIKING":
+            # Execute click (only if not paused and not in cooldown/resting)
+            can_like = (self.state == "LIKING" and
+                       not self.manual_pause_like and
+                       not speed_limit_cooldown)
+            if can_like:
                 try:
                     await self._do_click(video_element)
                     click_errors = 0
@@ -203,15 +283,13 @@ class DouYinLiker(BrowserBase):
                         self.log("连续错误次数过多，自动停止")
                         break
                     await asyncio.sleep(1)
+            elif not speed_limit_cooldown and self.state != "RESTING":
+                # Small sleep if we're not clicking (but not in cooldown/resting)
+                await asyncio.sleep(0.1)
 
-            # Process AI Comment
-            if self.config.get("ai_enabled", False):
+            # Process AI Comment (independent of like pause state)
+            if self.config.get("ai_enabled", False) and not self.manual_pause_comment:
                 await self._process_ai_comment()
-            
-            # 如果是在 RESTING 状态且没有执行 _process_ai_comment (时间未到)，
-            # 循环可能会跑得太快，因为 _show_rest_countdown 已经 sleep(1) 了，所以这里不需要额外的 sleep
-            # 如果是 LIKING 状态，_do_click 内部会有 sleep
-            # 所以循环节奏应该是受控的
 
     async def _wait_for_video(self):
         """Wait for video element"""
@@ -295,8 +373,17 @@ class DouYinLiker(BrowserBase):
             await asyncio.sleep(2)
         return True
 
+    async def _check_speed_limit_inline(self):
+        """Check if speed limited (non-blocking, returns True if limited)"""
+        try:
+            if await self.page.get_by_text(Config.SPEED_LIMIT_TEXT).is_visible():
+                return True
+        except:
+            pass
+        return False
+
     async def _check_speed_limit(self):
-        """Check if speed limited"""
+        """Check if speed limited (legacy method with blocking - kept for compatibility)"""
         try:
             if await self.page.get_by_text(Config.SPEED_LIMIT_TEXT).is_visible():
                 self.log(f"检测到手速限制，冷却 {Config.COOLDOWN_SECONDS} 秒...")
