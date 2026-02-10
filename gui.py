@@ -470,7 +470,5 @@ class App:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    # 设置图标（如果有的话）
-    # root.iconbitmap("icon.ico")
     app = App(root)
     root.mainloop()

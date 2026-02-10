@@ -1,8 +1,6 @@
 import threading
 import os
 import time
-import glob
-import shutil
 from datetime import datetime
 import numpy as np
 import soundcard as sc

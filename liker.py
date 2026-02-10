@@ -656,8 +656,6 @@ class DouYinLiker(BrowserBase):
                         delta = chunk.choices[0].delta
                         if delta.content:
                             full_content.append(delta.content)
-                    # elif hasattr(chunk, 'usage') and chunk.usage:
-                    #     self.log(f"[AI] Token Usage: {chunk.usage}")
 
                 comment = "".join(full_content).strip()
             except Exception as api_error:
