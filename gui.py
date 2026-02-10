@@ -48,6 +48,8 @@ class App:
 
         # 状态标志
         self.is_showing_captcha_alert = False
+        self._last_status_text = None  # 缓存上次状态文本，避免重复更新
+        self._has_prompted_cleanup = False  # 防止重复弹出清理确认框
 
         # 异步循环和业务对象
         self.loop = asyncio.new_event_loop()
@@ -234,7 +236,11 @@ class App:
         self.log_area.config(state='disabled')
         
     def update_status(self, total_likes, state_text):
-        self.root.after(0, lambda: self.status_var.set(f"状态: {state_text} | 累计点赞: {total_likes}"))
+        # 缓存状态文本，避免重复更新导致界面跳动
+        status_text = f"状态: {state_text} | 累计点赞: {total_likes}"
+        if status_text != self._last_status_text:
+            self._last_status_text = status_text
+            self.root.after(0, lambda: self.status_var.set(status_text))
         
         # 处理特殊状态
         if state_text == "PAUSED_FOR_CAPTCHA":
@@ -246,8 +252,10 @@ class App:
         if state_text == "STOPPED":
             self.root.after(0, self.reset_buttons)
             self.is_showing_captcha_alert = False # 重置标志
-            # Check for cleanup
-            self.root.after(100, self.prompt_cleanup)
+            # 弹窗询问是否清理临时文件（只弹一次）
+            if not self._has_prompted_cleanup:
+                self._has_prompted_cleanup = True
+                self.root.after(100, self.prompt_cleanup)
             
     def _show_captcha_alert(self):
         messagebox.showwarning(
@@ -378,6 +386,8 @@ class App:
 
         # Clear log buffer for new task
         self.log_buffer = []
+        # 重置清理提示标志
+        self._has_prompted_cleanup = False
 
         # 收集配置
         config = {

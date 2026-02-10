@@ -353,6 +353,10 @@ class DouYinLiker(BrowserBase):
             self.state = "PAUSED_FOR_CAPTCHA"
             self.update_stats()
 
+        # 连续检测计数器：需要连续两次检测不到验证码才确认恢复
+        clear_count = 0
+        required_clear_count = 2  # 连续2次检测不到才确认
+
         while not self.should_stop:
             still_captcha = False
             try:
@@ -361,7 +365,7 @@ class DouYinLiker(BrowserBase):
                     if await self.page.get_by_text(text).is_visible():
                         still_captcha = True
                         break
-                
+
                 # Check frames if not found yet
                 if not still_captcha:
                     for frame in self.page.frames:
@@ -372,7 +376,7 @@ class DouYinLiker(BrowserBase):
                                     break
                             if still_captcha: break
                         except: continue
-                
+
                 # Check selectors if not found yet
                 if not still_captcha:
                     for sel in Config.CAPTCHA_SELECTORS:
@@ -383,11 +387,16 @@ class DouYinLiker(BrowserBase):
                 pass
 
             if not still_captcha:
-                self.log("验证码已解决，恢复运行...")
-                self.state = "LIKING"
-                self.update_stats()
-                break
-            
+                clear_count += 1
+                if clear_count >= required_clear_count:
+                    self.log("验证码已解决，恢复运行...")
+                    self.state = "LIKING"
+                    self.update_stats()
+                    break
+            else:
+                # 检测到验证码，重置计数器
+                clear_count = 0
+
             # 延长检测间隔，避免频繁占用资源
             await asyncio.sleep(2)
         return True
