@@ -10,31 +10,61 @@ import subprocess
 from liker import DouYinLiker
 from config import Config
 
+# Import path utilities
+try:
+    from build_config import (
+        get_app_path, get_config_path, get_state_path,
+        get_default_config_path, get_data_path
+    )
+except ImportError:
+    pass
+
+    # Fallback functions for development
+    def get_app_path():
+        return os.path.dirname(os.path.abspath(__file__))
+    def get_config_path():
+        return os.path.join(get_app_path(), "config.json")
+    def get_state_path():
+        return os.path.join(get_app_path(), "state.json")
+    def get_default_config_path():
+        return os.path.join(get_app_path(), "config.json.default")
+    def get_data_path():
+        return os.path.dirname(os.path.abspath(__file__))
+
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("抖音直播自动点赞助手 v2.0")
+        self.root.title("DouYin AutoLiker v2.0")
         self.root.geometry("600x750")
-        
+
+        # Ensure config file exists (create default on first run)
+        config_path = get_config_path()
+        if not os.path.exists(config_path):
+            os.makedirs(os.path.dirname(config_path), exist_ok=True)
+            # Create empty default config
+            default_config = {"url": ""}
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(default_config, f, indent=4, ensure_ascii=False)
+
         # 状态标志
         self.is_showing_captcha_alert = False
-        
+
         # 异步循环和业务对象
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self._run_async_loop, daemon=True)
         self.thread.start()
-        
+
         self.liker = DouYinLiker(
             log_callback=self.append_log,
             status_callback=self.update_status
         )
-        
+
         self.setup_ui()
         self.load_ui_config()
-        
+
         # 检查登录状态
-        if not os.path.exists("state.json"):
-            self.append_log("提示: 未检测到登录信息，建议先点击【扫码登录】")
+        if not os.path.exists(get_state_path()):
+            self.append_log("Tip: No login state detected. Please click [Scan QR Login] first.")
 
     def _run_async_loop(self):
         asyncio.set_event_loop(self.loop)
@@ -221,16 +251,28 @@ class App:
     def run_login(self):
         # 调用 auth.py 脚本
         try:
-            # 使用 start 异步运行，避免卡住界面
-            subprocess.Popen(["python", "auth.py"], creationflags=subprocess.CREATE_NEW_CONSOLE)
+            if getattr(sys, 'frozen', False):
+                # Packaged: use embedded Python
+                from build_config import get_app_path
+                app_path = get_app_path()
+                script_path = os.path.join(app_path, "_internal", "auth.py")
+                python_exe = sys.executable
+            else:
+                # Development
+                script_path = "auth.py"
+                python_exe = "python"
+
+            subprocess.Popen([python_exe, script_path],
+                            creationflags=subprocess.CREATE_NEW_CONSOLE)
         except Exception as e:
-            messagebox.showerror("错误", f"无法启动登录脚本: {e}")
+            messagebox.showerror("Error", f"Failed to launch login script: {e}")
 
     def load_ui_config(self):
         """Load UI configuration from file"""
-        if os.path.exists("config.json"):
+        config_path = get_config_path()
+        if os.path.exists(config_path):
             try:
-                with open("config.json", "r", encoding="utf-8") as f:
+                with open(config_path, "r", encoding="utf-8") as f:
                     config = json.load(f)
                     if "url" in config:
                         self.url_var.set(config["url"])
@@ -240,19 +282,19 @@ class App:
                         self.ai_prompt_text.delete("1.0", "end")
                         self.ai_prompt_text.insert("1.0", config["ai_prompt"])
             except Exception as e:
-                self.append_log(f"加载配置文件失败: {e}")
+                self.append_log(f"Failed to load config file: {e}")
 
     def save_ui_config(self):
         """Save UI configuration to file"""
         # Get values
         current_api_key = self.ai_key_var.get().strip()
         current_prompt = self.ai_prompt_text.get("1.0", "end-1c")
-        
+
         # Determine if we should save AI config (only if not default placeholder)
         ai_config = {}
         if current_api_key and current_api_key != "YOUR_API_KEY_HERE":
             ai_config["ai_api_key"] = current_api_key
-        
+
         if current_prompt:
             ai_config["ai_prompt"] = current_prompt
 
@@ -260,12 +302,14 @@ class App:
             "url": self.url_var.get().strip(),
             **ai_config
         }
-        
+
         try:
-            with open("config.json", "w", encoding="utf-8") as f:
+            config_path = get_config_path()
+            os.makedirs(os.path.dirname(config_path), exist_ok=True)
+            with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=4, ensure_ascii=False)
         except Exception as e:
-            self.append_log(f"保存配置文件失败: {e}")
+            self.append_log(f"Failed to save config file: {e}")
 
     def start_task(self):
         url = self.url_var.get().strip()

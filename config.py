@@ -65,6 +65,9 @@ class Config:
 
 【关键约束】每次生成必须与之前完全不同，不要重复任何说过的句子，即使意思相近也要换一种表达方式。"""
 
+    # Build config flag (for packaged environment detection)
+    USE_BUILD_CONFIG = False  # Default value, will be updated below
+
 
 # Default config for CLI (used by main.py)
 DEFAULT_CONFIG = {
@@ -79,3 +82,42 @@ DEFAULT_CONFIG = {
     "ai_enabled": Config.AI_ENABLED,
     "ai_interval": Config.AI_COMMENT_INTERVAL,
 }
+
+# Import path utilities for packaged environment
+try:
+    from build_config import (
+        get_base_path, get_app_path, get_data_path,
+        get_config_path, get_state_path, get_logs_path
+    )
+    Config.USE_BUILD_CONFIG = True
+except ImportError:
+    # Development environment
+    Config.USE_BUILD_CONFIG = False
+
+    # Fallback functions for development
+    def get_base_path():
+        import os
+        return os.path.dirname(os.path.abspath(__file__))
+
+    def get_app_path():
+        import os
+        return os.path.dirname(os.path.abspath(__file__))
+
+    def get_data_path():
+        import os
+        return os.path.dirname(os.path.abspath(__file__))
+
+    def get_config_path():
+        import os
+        return os.path.join(get_data_path(), "config.json")
+
+    def get_state_path():
+        import os
+        return os.path.join(get_data_path(), "state.json")
+
+    def get_logs_path():
+        import os
+        logs_path = os.path.join(get_data_path(), "logs")
+        if not os.path.exists(logs_path):
+            os.makedirs(logs_path)
+        return logs_path
