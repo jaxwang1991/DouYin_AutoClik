@@ -243,13 +243,13 @@ class App:
             self.root.after(0, lambda: self.status_var.set(status_text))
         
         # 处理特殊状态
-        if state_text == "PAUSED_FOR_CAPTCHA":
+        if state_text.startswith("PAUSED_FOR_CAPTCHA"):
             if not self.is_showing_captcha_alert:
                 self.is_showing_captcha_alert = True
                 self.root.after(0, self._show_captcha_alert)
             
         # 如果检测到停止，重置按钮状态
-        if state_text == "STOPPED":
+        if state_text.startswith("STOPPED"):
             self.root.after(0, self.reset_buttons)
             self.is_showing_captcha_alert = False # 重置标志
             # 弹窗询问是否清理临时文件（只弹一次）

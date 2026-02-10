@@ -353,38 +353,28 @@ class DouYinLiker(BrowserBase):
             self.state = "PAUSED_FOR_CAPTCHA"
             self.update_stats()
 
-        # 连续检测计数器：需要连续两次检测不到验证码才确认恢复
+        # 先稳定检测验证码确实存在（避免误判临时弹窗）
+        stable_count = 0
+        required_stable = 2  # 需要连续2次确认验证码存在
+        while stable_count < required_stable:
+            still_captcha = await self._detect_captcha_once()
+            if still_captcha:
+                stable_count += 1
+            else:
+                # 验证码消失了，可能被误判，退出
+                self.log("验证码检测中断，可能为误判，恢复运行...")
+                self.state = "LIKING"
+                self.update_stats()
+                return True
+            await asyncio.sleep(1)
+
+        # 验证码确认存在，等待清除
+        self.log("确认验证码存在，等待用户处理...")
         clear_count = 0
-        required_clear_count = 2  # 连续2次检测不到才确认
+        required_clear_count = 5  # 连续5次检测不到才确认（约10秒）
 
         while not self.should_stop:
-            still_captcha = False
-            try:
-                # Check texts
-                for text in Config.CAPTCHA_TEXTS:
-                    if await self.page.get_by_text(text).is_visible():
-                        still_captcha = True
-                        break
-
-                # Check frames if not found yet
-                if not still_captcha:
-                    for frame in self.page.frames:
-                        try:
-                            for text in Config.CAPTCHA_TEXTS:
-                                if await frame.get_by_text(text).is_visible():
-                                    still_captcha = True
-                                    break
-                            if still_captcha: break
-                        except: continue
-
-                # Check selectors if not found yet
-                if not still_captcha:
-                    for sel in Config.CAPTCHA_SELECTORS:
-                        if await self.page.locator(sel).first.is_visible():
-                            still_captcha = True
-                            break
-            except:
-                pass
+            still_captcha = await self._detect_captcha_once()
 
             if not still_captcha:
                 clear_count += 1
@@ -394,12 +384,35 @@ class DouYinLiker(BrowserBase):
                     self.update_stats()
                     break
             else:
-                # 检测到验证码，重置计数器
                 clear_count = 0
 
-            # 延长检测间隔，避免频繁占用资源
             await asyncio.sleep(2)
         return True
+
+    async def _detect_captcha_once(self):
+        """单次检测验证码是否存在（不阻塞）"""
+        try:
+            # Check texts
+            for text in Config.CAPTCHA_TEXTS:
+                if await self.page.get_by_text(text).is_visible():
+                    return True
+
+            # Check frames
+            for frame in self.page.frames:
+                try:
+                    for text in Config.CAPTCHA_TEXTS:
+                        if await frame.get_by_text(text).is_visible():
+                            return True
+                except:
+                    continue
+
+            # Check selectors
+            for sel in Config.CAPTCHA_SELECTORS:
+                if await self.page.locator(sel).first.is_visible():
+                    return True
+        except:
+            pass
+        return False
 
     async def _check_speed_limit_inline(self):
         """Check if speed limited (non-blocking, returns True if limited)"""
