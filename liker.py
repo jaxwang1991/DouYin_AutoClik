@@ -412,10 +412,17 @@ class DouYinLiker(BrowserBase):
 
     def _save_screenshot(self):
         """Save screenshot for verification"""
-        if not os.path.exists(Config.SCREENSHOT_DIR):
-            os.makedirs(Config.SCREENSHOT_DIR)
+        # Determine screenshot directory
+        if Config.USE_BUILD_CONFIG:
+            from build_config import get_logs_path
+            screenshot_dir = get_logs_path()
+        else:
+            screenshot_dir = Config.SCREENSHOT_DIR
+
+        if not os.path.exists(screenshot_dir):
+            os.makedirs(screenshot_dir)
         ts = time.strftime("%H-%M-%S")
-        asyncio.create_task(self.page.screenshot(path=f"{Config.SCREENSHOT_DIR}/auto_{ts}.png"))
+        asyncio.create_task(self.page.screenshot(path=f"{screenshot_dir}/auto_{ts}.png"))
 
     async def _process_ai_comment(self):
         """Process AI comment generation and sending"""

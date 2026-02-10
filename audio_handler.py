@@ -10,16 +10,24 @@ import soundfile as sf
 import asyncio
 
 class AudioHandler:
-    def __init__(self, output_dir="logs/audio", transcript_dir="logs/transcripts", log_callback=None):
-        self.output_dir = output_dir
-        self.transcript_dir = transcript_dir
+    def __init__(self, output_dir=None, transcript_dir=None, log_callback=None):
         self.log_callback = log_callback
-        
+
+        # Use build config paths if available
+        try:
+            from build_config import get_logs_path
+            logs_path = get_logs_path()
+            self.output_dir = output_dir or os.path.join(logs_path, "audio")
+            self.transcript_dir = transcript_dir or os.path.join(logs_path, "transcripts")
+        except ImportError:
+            self.output_dir = output_dir or "logs/audio"
+            self.transcript_dir = transcript_dir or "logs/transcripts"
+
         # Create directories if they don't exist
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-        if not os.path.exists(transcript_dir):
-            os.makedirs(transcript_dir)
+        if not os.path.exists(self.output_dir):
+            os.makedirs(self.output_dir)
+        if not os.path.exists(self.transcript_dir):
+            os.makedirs(self.transcript_dir)
         
         self.is_recording = False
         self.frames = []
