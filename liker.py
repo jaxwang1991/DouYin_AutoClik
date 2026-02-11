@@ -45,10 +45,16 @@ class DouYinLiker(BrowserBase):
         self.total_likes = 0
         self.state = "IDLE"
 
-    def update_stats(self):
-        if self.status_callback:
-            state_text = self.state
+        # 用于冷却/休息倒计时显示
+        self._cooldown_remaining = 0
 
+    def update_stats(self, remaining_seconds=None):
+        """更新状态显示
+
+        Args:
+            remaining_seconds: 可选，用于 COOLDOWN/RESTING 状态的剩余秒数
+        """
+        if self.status_callback:
             # Add like status
             if self.manual_pause_like:
                 like_status = "暂停"
@@ -71,12 +77,42 @@ class DouYinLiker(BrowserBase):
             else:
                 comment_status = "运行中"
 
-            # Add AI countdown if enabled
-            if self.config.get("ai_enabled", False):
-                countdown = self._get_next_comment_countdown()
-                state_text = f"{self.state} | 点赞: {like_status} | 评论: {comment_status} | {countdown}"
+            # COOLDOWN 状态：显示倒计时
+            if self.state == "COOLDOWN":
+                if remaining_seconds is not None:
+                    m, s = divmod(int(remaining_seconds), 60)
+                    if m > 0:
+                        state_prefix = f"冷却中 {m}分{s:02d}秒"
+                    else:
+                        state_prefix = f"冷却中 {s}秒"
+                else:
+                    state_prefix = "冷却中"
+                if self.config.get("ai_enabled", False):
+                    countdown = self._get_next_comment_countdown()
+                    state_text = f"{state_prefix} | 点赞: {like_status} | 评论: {comment_status} | {countdown}"
+                else:
+                    state_text = f"{state_prefix} | 点赞: {like_status}"
+
+            # RESTING 状态：显示倒计时
+            elif self.state == "RESTING":
+                if remaining_seconds is not None:
+                    m, s = divmod(int(remaining_seconds), 60)
+                    state_prefix = f"休息中 {m}分{s:02d}秒"
+                else:
+                    state_prefix = "休息中"
+                if self.config.get("ai_enabled", False):
+                    countdown = self._get_next_comment_countdown()
+                    state_text = f"{state_prefix} | 点赞: {like_status} | 评论: {comment_status} | {countdown}"
+                else:
+                    state_text = f"{state_prefix} | 点赞: {like_status}"
+
+            # 其他状态：显示状态码
             else:
-                state_text = f"{self.state} | 点赞: {like_status}"
+                if self.config.get("ai_enabled", False):
+                    countdown = self._get_next_comment_countdown()
+                    state_text = f"{self.state} | 点赞: {like_status} | 评论: {comment_status} | {countdown}"
+                else:
+                    state_text = f"{self.state} | 点赞: {like_status}"
 
             self.status_callback(self.total_likes, state_text)
 
@@ -231,7 +267,12 @@ class DouYinLiker(BrowserBase):
 
             # Update stats every 1 second for real-time countdown
             if current_time - last_update_time >= 1.0:
-                self.update_stats()
+                # 如果在冷却中，传递剩余时间
+                if speed_limit_cooldown:
+                    remaining = int(speed_limit_end_time - current_time)
+                    self.update_stats(remaining_seconds=remaining)
+                else:
+                    self.update_stats()
                 last_update_time = current_time
 
             # Check total manual pause (both like and comment)
@@ -255,10 +296,11 @@ class DouYinLiker(BrowserBase):
                     self.log("冷却结束，恢复点赞...")
                     if not self.manual_pause_like:
                         self.state = "LIKING"
+                        self.update_stats()  # 恢复正常状态显示
                 else:
+                    # 不再直接调用 status_callback，让每秒的 update_stats() 处理
                     remaining = int(speed_limit_end_time - current_time)
-                    if self.status_callback:
-                        self.status_callback(self.total_likes, f"冷却中({remaining}s)")
+                    self._cooldown_remaining = remaining  # 保存剩余时间供 update_stats() 使用
                     await asyncio.sleep(1)
                     # Continue to check speed limit again, but don't skip AI comment
             else:
@@ -476,7 +518,7 @@ class DouYinLiker(BrowserBase):
         if self.state == "LIKING" and elapsed >= float(self.config["work_min"]):
             self.state = "RESTING"
             self.log(f"已工作 {int(elapsed)} 分钟，休息 {self.config['rest_min']} 分钟...")
-            self.update_stats()
+            # 不在这里调用 update_stats()，让 _show_rest_countdown() 独占 RESTING 状态显示
             return False
 
         if self.state == "RESTING" and elapsed >= float(self.config["rest_min"]):
@@ -492,15 +534,9 @@ class DouYinLiker(BrowserBase):
         elapsed_min = (current_time - cycle_start_time) / 60
         rest_min = float(self.config["rest_min"])
         remaining_sec = max(0, int((rest_min - elapsed_min) * 60))
-        m, s = divmod(remaining_sec, 60)
-        
-        status_text = f"休息中... {m}分{s:02d}秒"
-        if self.config.get("ai_enabled", False):
-            countdown = self._get_next_comment_countdown()
-            status_text += f" | {countdown}"
-            
-        if self.status_callback:
-            self.status_callback(self.total_likes, status_text)
+
+        # 调用 update_stats() 统一处理状态显示
+        self.update_stats(remaining_seconds=remaining_sec)
         await asyncio.sleep(1)
 
     async def _do_click(self, video_element):
