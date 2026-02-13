@@ -38,7 +38,9 @@ class Config:
 
     # Captcha detection texts (excluding login prompts)
     CAPTCHA_TEXTS = ["请完成下列验证后继续", "向右滑动完成拼图", "旋转图片", "短信验证", "获取验证码"]
-    CAPTCHA_SELECTORS = [".captcha_verify_container", "#captcha-verify-image", "[class*='captcha']"]
+    # Note: Removed overly broad "[class*='captcha']" selector to avoid
+    # false positives with login interface elements
+    CAPTCHA_SELECTORS = [".captcha_verify_container", "#captcha-verify-image"]
 
     # Live end detection texts
     LIVE_END_TEXTS = ["直播已结束", "已下播"]

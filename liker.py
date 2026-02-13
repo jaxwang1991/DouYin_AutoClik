@@ -306,6 +306,21 @@ class DouYinLiker(BrowserBase):
             if await self._check_captcha():
                 continue
 
+            # Check login required (after captcha check, before live end check)
+            # This ensures login interface is not mistaken for captcha
+            if await self._is_login_required():
+                self.log("检测到未登录状态")
+                self.state = "WAITING_FOR_LOGIN"
+                self.update_stats()
+                await self._wait_for_login()
+                # After successful login, save state and continue
+                if not self.should_stop:
+                    await self.save_state()
+                    self.log("登录状态已保存")
+                    self.state = "LIKING"
+                    self.update_stats()
+                continue
+
             # Check live end
             if await self._check_live_end():
                 break
@@ -493,6 +508,11 @@ class DouYinLiker(BrowserBase):
     async def _detect_captcha_once(self):
         """单次检测验证码是否存在（不阻塞）"""
         try:
+            # First, exclude login interface (login interface is not captcha)
+            # This prevents false positives when login page is displayed
+            if await self._is_login_required():
+                return False
+
             # Check texts
             for text in Config.CAPTCHA_TEXTS:
                 if await self.page.get_by_text(text).is_visible():
