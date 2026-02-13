@@ -9,8 +9,10 @@ import base64
 import difflib
 import re
 import json
+import concurrent.futures
 from audio_handler import AudioHandler
 from openai import AsyncOpenAI
+import dashscope
 from base import BrowserBase
 from config import Config, DEFAULT_CONFIG
 
@@ -37,6 +39,7 @@ class DouYinLiker(BrowserBase):
         self.ai_client = None
         self.comment_history = []  # Store recent comments to avoid duplicates
         self.next_comment_interval = 0  # Actual interval for current cycle (for display)
+        self._ai_comment_in_progress = False  # Prevent concurrent AI comment calls
 
         # Audio Handler
         self.audio_handler = None
@@ -47,6 +50,9 @@ class DouYinLiker(BrowserBase):
 
         # 用于冷却/休息倒计时显示
         self._cooldown_remaining = 0
+
+        # Thread pool executor for blocking API calls
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
     def update_stats(self, remaining_seconds=None):
         """更新状态显示
@@ -317,23 +323,22 @@ class DouYinLiker(BrowserBase):
             if self.config["cycle_mode"]:
                 if not self._handle_cycle_mode(current_time, cycle_start_time):
                     cycle_start_time = current_time
+                    # If transitioned to RESTING, skip this iteration and show countdown
                     if self.state == "RESTING":
                         if await self._check_live_end():
                             break
                         await self._show_rest_countdown(current_time, cycle_start_time)
-                    else:
-                        pass
-
-            # Resting state - skip click but allow AI comment
-            if self.state == "RESTING":
-                if await self._check_live_end():
-                    break
-                await self._show_rest_countdown(current_time, cycle_start_time)
+                        continue  # Skip the rest of this loop iteration
+                    # If transitioned to LIKING, continue normally
+            elif self.state == "RESTING":
+                # Non-cycle mode should not have RESTING state, but handle it
+                self.state = "LIKING"
 
             # Execute click (only if not paused and not in cooldown/resting)
             can_like = (self.state == "LIKING" and
                        not self.manual_pause_like and
                        not speed_limit_cooldown)
+
             if can_like:
                 try:
                     await self._do_click(video_element)
@@ -349,8 +354,9 @@ class DouYinLiker(BrowserBase):
                 await asyncio.sleep(0.1)
 
             # Process AI Comment (independent of like pause state)
+            # Run as background task to avoid blocking the like loop
             if self.config.get("ai_enabled", False) and not self.manual_pause_comment:
-                await self._process_ai_comment()
+                asyncio.create_task(self._process_ai_comment())
 
     async def _wait_for_video(self):
         """Wait for video element"""
@@ -540,9 +546,9 @@ class DouYinLiker(BrowserBase):
         await asyncio.sleep(1)
 
     async def _do_click(self, video_element):
-        """Execute double click at random position"""
+        """Execute click at random position"""
         x, y = self._get_click_position(video_element)
-        await self.page.mouse.dblclick(x, y)
+        await self.page.mouse.click(x, y)
         self.total_likes += 1
 
         # Screenshot in headless mode
@@ -590,35 +596,37 @@ class DouYinLiker(BrowserBase):
 
     async def _process_ai_comment(self):
         """Process AI comment generation and sending"""
-        now = time.time()
-
-        # Check interval - use random interval between min and max
-        interval_min = self.config.get("ai_interval_min", Config.AI_COMMENT_INTERVAL_MIN)
-        interval_max = self.config.get("ai_interval_max", Config.AI_COMMENT_INTERVAL_MAX)
-
-        # Backward compatibility: if only ai_interval is set, use it
-        if "ai_interval" in self.config and "ai_interval_min" not in self.config:
-            interval_min = self.config.get("ai_interval", Config.AI_COMMENT_INTERVAL)
-            interval_max = interval_min
-
-        # For countdown display, use the current cycle's interval or max
-        if self.next_comment_interval > 0:
-            check_interval = self.next_comment_interval
-        else:
-            check_interval = interval_max
-
-        if now - self.last_comment_time < check_interval:
+        # Prevent concurrent calls (running in background task)
+        if self._ai_comment_in_progress:
             return
-
-        # Set new random interval for next cycle
-        self.next_comment_interval = random.uniform(interval_min, interval_max)
-        self.last_comment_time = now
+        self._ai_comment_in_progress = True
 
         try:
-            self.log("[AI] 正在截取直播画面...")
-            # Screenshot buffer (base64) - captures only the viewport
-            screenshot_bytes = await self.page.screenshot(type="jpeg", quality=50)
-            b64_image = base64.b64encode(screenshot_bytes).decode('utf-8')
+            now = time.time()
+
+            # Check interval - use random interval between min and max
+            interval_min = self.config.get("ai_interval_min", Config.AI_COMMENT_INTERVAL_MIN)
+            interval_max = self.config.get("ai_interval_max", Config.AI_COMMENT_INTERVAL_MAX)
+
+            # Backward compatibility: if only ai_interval is set, use it
+            if "ai_interval" in self.config and "ai_interval_min" not in self.config:
+                interval_min = self.config.get("ai_interval", Config.AI_COMMENT_INTERVAL)
+                interval_max = interval_min
+
+            # For countdown display, use the current cycle's interval or max
+            if self.next_comment_interval > 0:
+                check_interval = self.next_comment_interval
+            else:
+                check_interval = interval_max
+
+            if now - self.last_comment_time < check_interval:
+                return
+
+            # Set new random interval for next cycle
+            self.next_comment_interval = random.uniform(interval_min, interval_max)
+            # Note: last_comment_time will be set AFTER comment is successfully sent
+
+            self.log("[AI] 正在准备生成评论...")
 
             # 1. Base System Prompt from GUI
             base_prompt = self.config.get("ai_prompt") or Config.AI_PROMPT
@@ -658,50 +666,53 @@ class DouYinLiker(BrowserBase):
                 except Exception as e:
                     self.log(f"[Audio] 音频处理失败: {e}")
 
-            # Add user message with image
+            # Add user message (text only, qwen-plus does not support images)
             messages.append({
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": "结合画面和语音内容，生成一句评论。"},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{b64_image}"
-                        }
-                    }
-                ]
+                "content": "根据主播语音内容，生成一句评论。"
             })
 
             self.log(f"[AI] 准备就绪，正在请求大模型生成评论...")
 
             comment = None  # Reset comment
             try:
-                response = await self.ai_client.chat.completions.create(
-                    model=Config.AI_MODEL,
-                    messages=messages,
-                    max_tokens=100,
-                    temperature=Config.AI_TEMPERATURE,  # High temperature for diversity
-                    stream=True,
-                    stream_options={"include_usage": True},
-                    modalities=["text"]
+                # Use native DashScope API in thread pool to avoid blocking event loop
+                api_key = self.config.get("ai_api_key") or Config.AI_API_KEY
+                loop = asyncio.get_event_loop()
+                response = await loop.run_in_executor(
+                    self.executor,
+                    lambda: dashscope.Generation.call(
+                        api_key=api_key,
+                        model=Config.AI_MODEL,
+                        messages=messages,
+                        max_tokens=100,
+                        temperature=Config.AI_TEMPERATURE,
+                        result_format="message",
+                        enable_thinking=Config.AI_ENABLE_THINKING
+                    )
                 )
 
-                full_content = []
-                async for chunk in response:
-                    if chunk.choices:
-                        delta = chunk.choices[0].delta
-                        if delta.content:
-                            full_content.append(delta.content)
-
-                comment = "".join(full_content).strip()
+                if response.status_code == 200:
+                    # Optional: Log thinking process for debugging
+                    if hasattr(response.output.choices[0].message, 'reasoning_content'):
+                        thinking_content = response.output.choices[0].message.reasoning_content
+                        if thinking_content:
+                            self.log(f"[AI] 思考过程: {thinking_content[:100]}...")
+                    comment = response.output.choices[0].message.content.strip()
+                else:
+                    self.log(f"[AI] API调用失败: HTTP {response.status_code}, 错误码: {response.code}, 错误信息: {response.message}")
+                    self.next_comment_interval = 0  # Reset interval to retry sooner
+                    return
             except Exception as api_error:
                 self.log(f"[AI] API调用失败: {type(api_error).__name__}: {api_error}")
+                self.next_comment_interval = 0  # Reset interval to retry sooner
                 return
 
             self.log(f"[AI] 生成评论: {comment}")
 
             if not comment:
                 self.log("[AI] 生成的评论为空，跳过发送")
+                self.next_comment_interval = 0  # Reset interval to retry sooner
                 return
 
             # Enhanced deduplication: check both exact match and normalized match
@@ -710,12 +721,14 @@ class DouYinLiker(BrowserBase):
             # Check exact match
             if comment in self.comment_history:
                 self.log(f"[AI] 检测到重复评论（完全匹配），跳过发送: {comment}")
+                self.next_comment_interval = 0  # Reset interval to retry sooner
                 return
 
             # Check normalized match (removes punctuation, spaces for fuzzy comparison)
             for hist_comment in self.comment_history:
                 if self._normalize_comment(hist_comment) == normalized_comment:
                     self.log(f"[AI] 检测到重复评论（相似匹配），跳过发送: {comment} (相似于: {hist_comment})")
+                    self.next_comment_interval = 0  # Reset interval to retry sooner
                     return
 
             self.log(f"[AI] 评论生成成功: {comment}")
@@ -725,9 +738,14 @@ class DouYinLiker(BrowserBase):
                 self.comment_history = self.comment_history[-50:]
 
             await self._send_comment(comment)
+            # Set timestamp AFTER comment is sent successfully
+            self.last_comment_time = time.time()
+            self.log(f"[AI] 评论已发送，下次评论将在 {self.next_comment_interval:.0f} 秒后")
 
         except Exception as e:
             self.log(f"[AI] 评论生成流程异常: {e}")
+        finally:
+            self._ai_comment_in_progress = False
 
     async def _send_comment(self, text):
         """Send comment to chat"""

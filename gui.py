@@ -124,7 +124,7 @@ class App:
         frame_cycle = ttk.LabelFrame(self.tab_basic, text="循环休息模式 (防风控)", padding=10)
         frame_cycle.pack(fill="x", padx=10, pady=5)
         
-        self.cycle_var = tk.BooleanVar(value=True)
+        self.cycle_var = tk.BooleanVar(value=False)  # 默认关闭，避免 RESTING 状态陷阱
         ttk.Checkbutton(frame_cycle, text="启用循环模式", variable=self.cycle_var).grid(row=0, column=0, columnspan=4, sticky="w")
         
         ttk.Label(frame_cycle, text="工作时长 (分钟):").grid(row=1, column=0, sticky="w")

@@ -51,7 +51,7 @@ class Config:
     AI_PROVIDER = "dashscope"
     AI_API_KEY = "YOUR_API_KEY_HERE"  # Replace with your actual key
     AI_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    AI_MODEL = "qwen3-omni-flash-2025-12-01"
+    AI_MODEL = "qwen-plus"
     AI_COMMENT_INTERVAL_MIN = 60  # minimum seconds between comments
     AI_COMMENT_INTERVAL_MAX = 120  # maximum seconds between comments
     AI_COMMENT_INTERVAL = 60  # seconds (legacy, for backward compatibility)
@@ -59,11 +59,12 @@ class Config:
     AI_HISTORY_FILE = "comment_history.json"  # persistent comment history file
     AI_TEMPERATURE = 1.0  # Higher value = more creative/random (0.0 - 2.0)
     AI_USE_AUDIO = True  # Enable audio recording and transcription for context
-    
+    AI_ENABLE_THINKING = True  # Enable deep thinking feature for better comment quality
+
     # AI System Prompt
     AI_PROMPT = """你是一个热情的直播间观众。
-请根据直播画面内容，生成一句简短的提问（40字以内）。
-提问内容必须围绕以下领域之一展开：当前直播间画面内容相关、兴隆咖啡相关领域，吉纳客公司相关，咖啡豆知识相关，速溶咖啡知识相关。
+请根据主播语音内容，生成一句简短的提问（40字以内）。
+提问内容必须围绕以下领域之一展开：兴隆咖啡相关领域，吉纳客公司相关，咖啡豆知识相关，速溶咖啡知识相关。
 风格要自然、活跃气氛。
 
 【关键约束】每次生成必须与之前完全不同，不要重复任何说过的句子，即使意思相近也要换一种表达方式。"""
