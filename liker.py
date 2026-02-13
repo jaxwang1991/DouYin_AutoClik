@@ -70,6 +70,8 @@ class DouYinLiker(BrowserBase):
                 like_status = "休息中"
             elif self.state == "PAUSED_FOR_CAPTCHA":
                 like_status = "验证码等待"
+            elif self.state == "WAITING_FOR_LOGIN":
+                like_status = "等待登录"
             elif self.state == "LIKING":
                 like_status = "运行中"
             else:
@@ -255,6 +257,19 @@ class DouYinLiker(BrowserBase):
             self.log(f"连接失败: {e}")
             return
 
+        # 新增：检测是否需要登录
+        if await self._is_login_required():
+            self.log("检测到未登录状态")
+            self.state = "WAITING_FOR_LOGIN"
+            self.update_stats()
+            await self._wait_for_login()
+            # 登录成功后保存状态
+            if not self.should_stop:
+                await self.save_state()
+                self.log("登录状态已保存")
+                self.state = "LIKING"
+                self.update_stats()
+
         # Wait for video
         self.log("正在等待视频加载...")
         video_element = await self._wait_for_video()
@@ -393,6 +408,44 @@ class DouYinLiker(BrowserBase):
             return False
         except:
             return False
+
+    async def _is_login_required(self):
+        """检测是否需要登录（返回 True 表示需要登录）"""
+        try:
+            # 检测登录提示文本
+            for text in Config.LOGIN_REQUIRED_TEXTS:
+                try:
+                    if await self.page.get_by_text(text).is_visible():
+                        return True
+                except:
+                    continue
+
+            # 检测所有 frame 中的登录提示
+            for frame in self.page.frames:
+                try:
+                    for text in Config.LOGIN_REQUIRED_TEXTS:
+                        if await frame.get_by_text(text).is_visible():
+                            return True
+                except:
+                    continue
+
+            return False
+        except:
+            return False
+
+    async def _wait_for_login(self):
+        """等待用户完成登录（浏览器可见模式下）"""
+        self.log("请在浏览器中扫码或密码登录...")
+        self.log("登录完成后系统将自动检测并继续")
+
+        # 每 2 秒检测一次是否登录成功
+        while not self.should_stop:
+            if not await self._is_login_required():
+                self.log("登录成功！")
+                return True
+            await asyncio.sleep(2)
+
+        return False
 
     async def _wait_captcha_clear(self):
         """Wait for captcha to be resolved"""
