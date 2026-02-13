@@ -803,34 +803,86 @@ class DouYinLiker(BrowserBase):
     async def _send_comment(self, text):
         """Send comment to chat"""
         try:
-            # Try to find input box
-            input_box = None
-            selectors = [
+            # Expand input box selectors
+            input_selectors = [
                 "textarea[placeholder*='说点什么']",
                 "textarea[class*='webcast-chatroom']",
                 "[contenteditable='true']",
-                "input[placeholder*='说点什么']"
+                "input[placeholder*='说点什么']",
+                ".webcast-chatroom___textarea",
+                "div[contenteditable='true']"
             ]
-            
-            for sel in selectors:
+
+            input_box = None
+            used_selector = None
+            for sel in input_selectors:
                 try:
-                    if await self.page.locator(sel).first.is_visible():
-                        input_box = self.page.locator(sel).first
+                    element = self.page.locator(sel).first
+                    if await element.is_visible():
+                        input_box = element
+                        used_selector = sel
+                        self.log(f"[AI] Found input box: {sel}")
                         break
                 except:
                     continue
-            
-            if input_box:
-                await input_box.click()
-                await input_box.fill(text)
-                await asyncio.sleep(0.5)
+
+            if not input_box:
+                self.log("[AI] Could not find comment input box")
+                return
+
+            # Click and focus
+            await input_box.click()
+            await asyncio.sleep(0.3)
+
+            # Clear and fill new content
+            await input_box.fill("")
+            await input_box.fill(text)
+
+            # Wait for content to stabilize (increased wait time)
+            await asyncio.sleep(1)
+
+            # Method 1: Try to click send button
+            send_button_selectors = [
+                "button:has-text('发送')",
+                "[class*='send']",
+                "[class*='Send']",
+                ".webcast-chatroom___send-btn",
+                "button[class*='primary']"
+            ]
+
+            sent = False
+            for btn_sel in send_button_selectors:
+                try:
+                    send_btn = self.page.locator(btn_sel).first
+                    if await send_btn.is_visible():
+                        await send_btn.click()
+                        sent = True
+                        self.log(f"[AI] Clicked send button: {btn_sel}")
+                        break
+                except:
+                    continue
+
+            # Method 2: If no send button found, try Enter key
+            if not sent:
                 await self.page.keyboard.press("Enter")
-                self.log(f"[AI] 评论已发送")
-            else:
-                self.log("[AI] 未找到评论输入框")
-                
+                self.log("[AI] Sent via Enter key")
+
+            # Verify send success (wait for comment to appear in chat area)
+            await asyncio.sleep(2)
+            # Simple verification: check if input box is cleared
+            try:
+                input_value = await input_box.inner_text()
+                if input_value and input_value.strip():
+                    self.log(f"[AI] Warning: Input box not empty, send might have failed")
+                    # Try sending again
+                    await self.page.keyboard.press("Enter")
+            except:
+                pass
+
+            self.log("[AI] Comment send process completed")
+
         except Exception as e:
-            self.log(f"[AI] 发送评论失败: {e}")
+            self.log(f"[AI] Failed to send comment: {e}")
 
     def _normalize_comment(self, text):
         """Normalize comment text for deduplication comparison.
