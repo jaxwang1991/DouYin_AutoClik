@@ -6,6 +6,8 @@ import numpy as np
 import soundcard as sc
 import soundfile as sf
 import asyncio
+import requests
+import json
 
 class AudioHandler:
     def __init__(self, output_dir=None, transcript_dir=None, log_callback=None):
@@ -121,77 +123,281 @@ class AudioHandler:
             self.log(f"保存转录文本失败: {e}")
             return None
 
+    async def _upload_file_for_asr(self, file_path, api_key, model="qwen3-asr-flash-filetrans"):
+        """Upload local audio file to DashScope temporary storage and return oss:// URL
+
+        Args:
+            file_path: Path to local audio file
+            api_key: DashScope API key
+            model: Model name for getting upload policy
+
+        Returns:
+            oss:// URL string or None on failure
+        """
+        # Get upload policy
+        policy_url = f"https://dashscope.aliyuncs.com/api/v1/uploads?action=getPolicy&model={model}"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        try:
+            self.log("获取文件上传凭证...")
+            resp = requests.get(policy_url, headers=headers)
+            if resp.status_code != 200:
+                self.log(f"获取上传凭证失败: {resp.status_code} - {resp.text}")
+                return None
+
+            policy_data = resp.json()
+            data = policy_data.get("data", {})
+
+            # Extract OSS multipart upload credentials
+            upload_host = data.get("upload_host")
+            policy = data.get("policy")
+            signature = data.get("signature")
+            upload_dir = data.get("upload_dir")
+            oss_access_key_id = data.get("oss_access_key_id")
+            x_oss_object_acl = data.get("x_oss_object_acl", "private")
+            x_oss_forbid_overwrite = data.get("x_oss_forbid_overwrite", "true")
+
+            if not all([upload_host, policy, signature, upload_dir, oss_access_key_id]):
+                self.log(f"上传凭证无效: 缺少必要字段")
+                self.log(f"Policy data: {list(data.keys())}")
+                return None
+
+            # Construct OSS object key: upload_dir + "/" + filename
+            filename = os.path.basename(file_path)
+            oss_key = f"{upload_dir}/{filename}"
+            upload_url = f"{upload_host}/"
+            oss_url = f"oss://{oss_key}"
+
+            # Read file content
+            with open(file_path, "rb") as f:
+                file_data = f.read()
+
+            # Build multipart/form-data for OSS upload
+            files = {
+                "file": (filename, file_data)
+            }
+            data_dict = {
+                "OSSAccessKeyId": oss_access_key_id,
+                "policy": policy,
+                "Signature": signature,
+                "key": oss_key,
+                "x-oss-object-acl": x_oss_object_acl,
+                "x-oss-forbid-overwrite": x_oss_forbid_overwrite,
+                "success_action_status": "200"
+            }
+
+            # Upload file via multipart/form-data POST
+            self.log(f"上传音频文件: {filename}")
+            upload_resp = requests.post(upload_url, files=files, data=data_dict)
+
+            if upload_resp.status_code != 200:
+                self.log(f"文件上传失败: {upload_resp.status_code} - {upload_resp.text[:200]}")
+                return None
+
+            self.log(f"文件上传成功: {oss_url}")
+            return oss_url
+
+        except Exception as e:
+            self.log(f"文件上传异常: {e}")
+            return None
+
+    async def _poll_transcription_result(self, task_id, api_key, poll_interval=2, max_poll_time=300):
+        """Poll transcription task status until completion
+
+        Args:
+            task_id: Transcription task ID
+            api_key: DashScope API key
+            poll_interval: Seconds between polls
+            max_poll_time: Maximum seconds to wait
+
+        Returns:
+            Transcription text or None on failure
+        """
+        query_url = f"https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        start_time = time.time()
+        poll_count = 0
+
+        while time.time() - start_time < max_poll_time:
+            poll_count += 1
+            await asyncio.sleep(poll_interval)
+
+            try:
+                resp = requests.get(query_url, headers=headers)
+                if resp.status_code != 200:
+                    self.log(f"查询任务状态失败: {resp.status_code}")
+                    continue
+
+                data = resp.json()
+                output = data.get("output", {})
+                status = output.get("task_status", "").upper()
+
+                if poll_count % 5 == 0:  # Log every 10 seconds
+                    self.log(f"转录任务状态: {status}")
+
+                if status == "SUCCEEDED":
+                    # API response structure: {task_id, task_status, result: {transcription_url}}
+                    result = output.get("result", {})
+                    transcription_url = result.get("transcription_url")
+
+                    if not transcription_url:
+                        self.log("转录成功但未找到 transcription_url")
+                        return None
+
+                    self.log(f"尝试从 URL 获取结果...")
+                    try:
+                        trans_resp = requests.get(transcription_url)
+                        if trans_resp.status_code == 200:
+                            trans_data = trans_resp.json()
+                            # Log structure for debugging
+                            self.log(f"URL 响应结构: {list(trans_data.keys())}")
+
+                            # Try different possible structures
+                            # Structure 1: {results: [{text: "...", ...}, ...]}
+                            if "results" in trans_data:
+                                transcripts = trans_data["results"]
+                                if transcripts:
+                                    text_parts = []
+                                    for item in transcripts:
+                                        text_parts.append(item.get("text", ""))
+                                    text = "".join(text_parts)
+                                    if text:
+                                        self.log(f"从 results 获取到文本: {len(text)} 字符")
+                                        return text
+
+                            # Structure 2: {transcripts: [{text: "...", ...}, ...]}
+                            if "transcripts" in trans_data:
+                                transcripts = trans_data["transcripts"]
+                                if transcripts:
+                                    text_parts = []
+                                    for item in transcripts:
+                                        text_parts.append(item.get("text", ""))
+                                    text = "".join(text_parts)
+                                    if text:
+                                        self.log(f"从 transcripts 获取到文本: {len(text)} 字符")
+                                        return text
+
+                            # Structure 3: {text: "..."}
+                            if "text" in trans_data:
+                                text = trans_data["text"]
+                                if text:
+                                    self.log(f"从 text 获取到文本: {len(text)} 字符")
+                                    return text
+
+                            # Structure 4: {transcription_text: "..."}
+                            if "transcription_text" in trans_data:
+                                text = trans_data["transcription_text"]
+                                if text:
+                                    self.log(f"从 transcription_text 获取到文本: {len(text)} 字符")
+                                    return text
+
+                            self.log(f"URL 响应中未找到文本内容。响应结构: {str(trans_data)[:300]}...")
+                            return None
+                        else:
+                            self.log(f"获取 URL 失败: {trans_resp.status_code}")
+                            return None
+                    except Exception as e:
+                        self.log(f"从 URL 获取结果异常: {e}")
+                        return None
+
+                elif status in ("FAILED", "UNKNOWN"):
+                    error_msg = output.get("message", "Unknown error")
+                    self.log(f"转录任务失败: {status} - {error_msg}")
+                    return None
+
+            except Exception as e:
+                self.log(f"轮询任务状态异常: {e}")
+
+        self.log(f"转录任务超时 ({max_poll_time}秒)")
+        return None
+
     async def transcribe(self, file_path, api_key):
-        """Transcribe using DashScope Qwen3-ASR"""
+        """Transcribe audio file using DashScope qwen3-asr-flash-filetrans API
+
+        This method uploads the file to temporary storage and polls for the result.
+        """
         if not file_path or not os.path.exists(file_path):
             return ""
 
-        self.log("正在转录音频 (Qwen3-ASR)...")
+        self.log("正在转录音频 (Qwen3-ASR-FileTrans)...")
+
         try:
-            import dashscope
-            dashscope.api_key = api_key
-            
-            # Use run_in_executor to avoid blocking event loop
-            loop = asyncio.get_running_loop()
-            
-            def _call_dashscope():
-                messages = [
-                    {
-                        "role": "system",
-                        "content": [{"text": ""}]
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {"audio": f"file://{os.path.abspath(file_path)}"}
-                        ]
-                    }
-                ]
-                
-                response = dashscope.MultiModalConversation.call(
-                    api_key=api_key,
-                    model="qwen3-asr-flash",
-                    messages=messages,
-                    result_format="message",
-                    asr_options={
-                        "enable_lid": True,
-                        "enable_itn": False
-                    }
-                )
-                return response
+            # Load configuration
+            try:
+                from config import Config
+                model = Config.ASR_MODEL
+                poll_interval = Config.ASR_POLL_INTERVAL
+                max_poll_time = Config.ASR_MAX_POLL_TIME
+            except ImportError:
+                model = "qwen3-asr-flash-filetrans"
+                poll_interval = 2
+                max_poll_time = 300
 
-            response = await loop.run_in_executor(None, _call_dashscope)
-            
-            if response.status_code == 200:
-                # Parse result from MultiModalConversation structure
-                # Typically: response.output.choices[0].message.content[0]['text']
-                text_content = ""
-                try:
-                    if hasattr(response, 'output') and response.output.choices:
-                        message = response.output.choices[0].message
-                        if isinstance(message.content, list):
-                            for item in message.content:
-                                if 'text' in item:
-                                    text_content += item['text']
-                        elif isinstance(message.content, str):
-                            text_content = message.content
-                except Exception as parse_err:
-                    self.log(f"解析响应失败: {parse_err}")
-                    return ""
-
-                if text_content:
-                    self.log(f"转录成功: {text_content[:20]}...")
-                    return text_content
-                else:
-                    self.log("转录结果为空")
-                    return ""
-            else:
-                self.log(f"转录失败: {response.message}")
+            # Step 1: Upload file to temporary storage
+            oss_url = await self._upload_file_for_asr(file_path, api_key, model)
+            if not oss_url:
                 return ""
-                
-        except ImportError:
-            self.log("请安装 dashscope 库: pip install dashscope")
-            return ""
+
+            # Step 2: Submit transcription task
+            submit_url = "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "X-DashScope-Async": "enable",
+                "X-DashScope-OssResourceResolve": "enable"  # Required for oss:// URLs
+            }
+
+            payload = {
+                "model": model,
+                "input": {
+                    "file_url": oss_url
+                },
+                "parameters": {
+                    "channel_id": [0],
+                    "enable_itn": False
+                }
+            }
+
+            self.log("提交转录任务...")
+            submit_resp = requests.post(
+                submit_url,
+                headers=headers,
+                data=json.dumps(payload)
+            )
+
+            if submit_resp.status_code != 200:
+                self.log(f"提交任务失败: {submit_resp.status_code} - {submit_resp.text}")
+                return ""
+
+            submit_data = submit_resp.json()
+            output = submit_data.get("output", {})
+
+            if "task_id" not in output:
+                self.log(f"响应中缺少 task_id: {submit_data}")
+                return ""
+
+            task_id = output["task_id"]
+            self.log(f"任务已提交 (ID: {task_id[:12]}...)")
+
+            # Step 3: Poll for result
+            text = await self._poll_transcription_result(
+                task_id, api_key, poll_interval, max_poll_time
+            )
+
+            if text:
+                self.log(f"转录成功: {text[:20]}...")
+                return text
+            else:
+                self.log("转录失败或结果为空")
+                return ""
+
         except Exception as e:
             self.log(f"转录异常: {e}")
             return ""
