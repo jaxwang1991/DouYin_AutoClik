@@ -1,31 +1,90 @@
 import os
-from dashscope import Generation
-import dashscope
-dashscope.base_http_api_url = 'https://dashscope.aliyuncs.com/api/v1'
+import time
+import requests
+import json
 
-messages = [
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": "你是谁？"},
-]
-response = Generation.call(
-    # 若没有配置环境变量，请用百炼API Key将下行替换为：api_key = "sk-xxx",
-    api_key=os.getenv("DASHSCOPE_API_KEY"),
-    model="qwen-plus",
-    messages=messages,
-    result_format="message",
-    # 开启深度思考
-    enable_thinking=True,
-)
 
-if response.status_code == 200:
-    # 打印思考过程
-    print("=" * 20 + "思考过程" + "=" * 20)
-    print(response.output.choices[0].message.reasoning_content)
-    
-    # 打印回复
-    print("=" * 20 + "完整回复" + "=" * 20)
-    print(response.output.choices[0].message.content)
-else:
-    print(f"HTTP返回码：{response.status_code}")
-    print(f"错误码：{response.code}")
-    print(f"错误信息：{response.message}")
+API_URL_SUBMIT = "https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription"
+API_URL_QUERY_BASE = "https://dashscope.aliyuncs.com/api/v1/tasks/"
+
+
+def main():
+    # If no environment variable is configured, please replace the downlink with the Bailian API Key: api_key = "sk-xxx"
+    api_key = os.getenv("DASHSCOPE_API_KEY")
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "X-DashScope-Async": "enable"
+    }
+
+
+    payload = {
+        "model": "qwen3-asr-flash-filetrans",
+        "input": {
+            "file_url": "https://dashscope.oss-cn-beijing.aliyuncs.com/audios/welcome.mp3"
+        },
+        "parameters": {
+            "channel_id": [0],
+            # "language": "zh",
+            "enable_itn": False
+            # "corpus": {
+            #     "text": ""
+            # }
+        }
+    }
+
+
+    try:
+        submit_resp = requests.post(API_URL_SUBMIT, headers=headers, data=json.dumps(payload))
+    except requests.RequestException as e:
+        print(f"Failed: {e}")
+        return
+
+    if submit_resp.status_code != 200:
+        print(f"Failed! HTTP code: {submit_resp.status_code}")
+        print(submit_resp.text)
+        return
+
+    resp_data = submit_resp.json()
+    output = resp_data.get("output")
+    if not output or "task_id" not in output:
+        print("resp_data:", resp_data)
+        return
+
+    task_id = output["task_id"]
+    print(f"任务已提交，task_id: {task_id}")
+
+
+    finished = False
+    while not finished:
+        time.sleep(2)
+
+        query_url = API_URL_QUERY_BASE + task_id
+        try:
+            query_resp = requests.get(query_url, headers=headers)
+        except requests.RequestException as e:
+            print(f"Failed: {e}")
+            return
+
+        if query_resp.status_code != 200:
+            print(f"Failed! HTTP code: {query_resp.status_code}")
+            print(query_resp.text)
+            return
+
+        query_data = query_resp.json()
+        output = query_data.get("output")
+        if output and "task_status" in output:
+            status = output["task_status"]
+            print(f"status: {status}")
+
+            if status.upper() in ("SUCCEEDED", "FAILED", "UNKNOWN"):
+                finished = True
+                print("task finished：")
+                print(json.dumps(query_data, indent=2, ensure_ascii=False))
+        else:
+            print("query data:", query_data)
+
+
+if __name__ == "__main__":
+    main()

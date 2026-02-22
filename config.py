@@ -66,6 +66,11 @@ class Config:
     AI_USE_AUDIO = True  # Enable audio recording and transcription for context
     AI_ENABLE_THINKING = True  # Enable deep thinking feature for better comment quality
 
+    # ASR (Audio Transcription) Settings
+    ASR_MODEL = "qwen3-asr-flash-filetrans"  # Transcription model
+    ASR_POLL_INTERVAL = 2  # Polling interval in seconds
+    ASR_MAX_POLL_TIME = 300  # Maximum polling time in seconds (5 minutes)
+
     # AI System Prompt
     AI_PROMPT = """你是一个热情的直播间观众。
 请根据主播语音内容，生成一句简短的提问（40字以内）。
