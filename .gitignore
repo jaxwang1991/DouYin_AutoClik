@@ -49,3 +49,14 @@ API代码示例.py
 # 用户文档
 CLAUDE.md
 README.txt
+
+# 运行时数据文件
+comment_history.json
+
+# 日志子目录（确保子目录也被覆盖）
+logs/audio/
+logs/transcripts/
+
+# 打包产物
+*.exe
+dist/
