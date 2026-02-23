@@ -161,7 +161,12 @@ class App:
         self.ai_prompt_text = scrolledtext.ScrolledText(frame_ai, height=10, width=50)
         self.ai_prompt_text.grid(row=2, column=1, sticky="w", padx=5)
         self.ai_prompt_text.insert("1.0", Config.AI_PROMPT)
-        
+
+        # 历史评论参考开关
+        self.ai_use_history_var = tk.BooleanVar(value=Config.AI_USE_COMMENT_HISTORY)
+        ttk.Checkbutton(frame_ai, text="参考历史评论（避免重复）",
+                      variable=self.ai_use_history_var).grid(row=3, column=0, columnspan=2, sticky="w", pady=5)
+
         # ==================== 公共区域 ====================
         
         # --- 4. 运行日志 ---
@@ -329,6 +334,8 @@ class App:
                         self.ai_interval_min_var.set(config["ai_interval_min"])
                     if "ai_interval_max" in config:
                         self.ai_interval_max_var.set(config["ai_interval_max"])
+                    if "ai_use_history" in config:
+                        self.ai_use_history_var.set(config["ai_use_history"])
                     # Backward compatibility: if old ai_interval exists, use it for both
                     elif "ai_interval" in config:
                         interval = config["ai_interval"]
@@ -350,6 +357,9 @@ class App:
 
         if current_prompt:
             ai_config["ai_prompt"] = current_prompt
+
+        # 保存历史评论开关（无论是否为默认值都保存）
+        ai_config["ai_use_history"] = self.ai_use_history_var.get()
 
         config = {
             "url": self.url_var.get().strip(),
@@ -405,7 +415,8 @@ class App:
             "ai_api_key": self.ai_key_var.get().strip(),
             "ai_interval_min": self.ai_interval_min_var.get(),
             "ai_interval_max": self.ai_interval_max_var.get(),
-            "ai_prompt": self.ai_prompt_text.get("1.0", "end-1c")
+            "ai_prompt": self.ai_prompt_text.get("1.0", "end-1c"),
+            "ai_use_history": self.ai_use_history_var.get()
         }
 
         # 提交到异步线程

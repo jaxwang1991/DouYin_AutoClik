@@ -65,6 +65,7 @@ class Config:
     AI_TEMPERATURE = 1.0  # Higher value = more creative/random (0.0 - 2.0)
     AI_USE_AUDIO = True  # Enable audio recording and transcription for context
     AI_ENABLE_THINKING = True  # Enable deep thinking feature for better comment quality
+    AI_USE_COMMENT_HISTORY = True  # Whether to reference comment history to avoid duplicates (True=reference, False=skip)
 
     # ASR (Audio Transcription) Settings
     ASR_MODEL = "qwen3-asr-flash-filetrans"  # Transcription model

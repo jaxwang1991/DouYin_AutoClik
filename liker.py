@@ -705,8 +705,8 @@ class DouYinLiker(BrowserBase):
             base_prompt = self.config.get("ai_prompt") or Config.AI_PROMPT
             system_content = base_prompt
 
-            # Add comment history to system prompt
-            if self.comment_history:
+            # Add comment history to system prompt (if enabled)
+            if self.comment_history and self.config.get("ai_use_history", True):
                 history_str = "\n".join([f"- {c}" for c in self.comment_history[-10:]])
                 system_content += f"\n\n【重要指令】\n请避开以下最近已生成的评论，不要重复：\n{history_str}"
 
