@@ -7,7 +7,7 @@ a = Analysis(
     pathex=[os.getcwd()],
     binaries=[],
     datas=[
-        ('playwright/driver/package/_internal', 'playwright/driver/package/_internal'),
+        # Playwright data will be copied by build.bat after packaging
     ],
     hiddenimports=[
         'playwright.sync',
