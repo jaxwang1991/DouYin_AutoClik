@@ -55,6 +55,12 @@ if not exist "dist\DouYin_AutoClik\data\logs" mkdir "dist\DouYin_AutoClik\data\l
 if not exist "dist\DouYin_AutoClik\data\logs\audio" mkdir "dist\DouYin_AutoClik\data\logs\audio"
 if not exist "dist\DouYin_AutoClik\data\logs\transcripts" mkdir "dist\DouYin_AutoClik\data\logs\transcripts"
 
+REM Copy README.txt
+if exist "README.txt" (
+    echo Copying README.txt...
+    copy /Y "README.txt" "dist\DouYin_AutoClik\"
+)
+
 echo.
 echo ====================================
 echo   Build completed successfully!
