@@ -199,7 +199,7 @@ numpy        # 数值计算
 build.bat
 ```
 
-打包后会生成 `dist/` 目录，包含可执行文件及依赖。首次运行打包版本前，需运行 `copy_browsers.bat` 复制浏览器驱动。
+打包后会生成 `dist/DouYin_AutoClik/` 目录，包含可执行文件及依赖。Playwright 浏览器已由构建脚本自动复制，可直接使用。
 
 ## 许可证
 
