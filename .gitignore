@@ -60,3 +60,6 @@ logs/transcripts/
 # 打包产物
 *.exe
 dist/
+
+# 临时文档与计划
+docs/plans/
