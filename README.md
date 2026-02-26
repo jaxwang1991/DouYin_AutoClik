@@ -75,10 +75,66 @@ python main.py <url> # CLI 模式
 | 脚本 | 说明 |
 |-----|------|
 | `run_gui.bat` | 启动图形界面 |
+| `run.bat` | 直接运行主程序 |
 | `login.bat` | 独立扫码登录 |
 | `setup.bat` | 安装依赖和浏览器驱动 |
-| `build.bat` | 打包为可执行文件 |
-| `copy_browsers.bat` | 复制浏览器到打包目录 |
+| `build.bat` | 打包为可执行文件（自动处理 Playwright 浏览器） |
+
+## 系统架构
+
+### 任务状态机
+
+```
+IDLE → STARTING → LIKING → [RESTING / PAUSED_FOR_CAPTCHA / COOLDOWN] → STOPPED
+         ↑                                                      ↓
+         └──────────────────────────────────────────────────────┘
+```
+
+| 状态 | 说明 | 触发条件 |
+|-----|------|---------|
+| `IDLE` | 空闲状态 | 程序启动或任务停止 |
+| `STARTING` | 启动中 | 点击"开始任务" |
+| `LIKING` | 点赞运行中 | 进入直播间，开始点赞 |
+| `RESTING` | 休息中 | 循环模式下达到工作时长 |
+| `PAUSED_FOR_CAPTCHA` | 验证码暂停 | 检测到验证码弹窗 |
+| `COOLDOWN` | 冷却中 | 检测到"手速太快"提示 |
+| `STOPPED` | 已停止 | 点击"停止"或异常终止 |
+
+### 线程与异步模型
+
+GUI 采用 **线程 + 异步事件循环** 模式：
+
+```
+┌─────────────────┐     ┌──────────────────────┐
+│   Tkinter GUI   │ ←→ │  Async Event Loop     │
+│   (主线程)       │     │  (独立线程)           │
+└─────────────────┘     └──────────────────────┘
+         ↑                        ↑
+         │                        │
+    after() 调度         run_coroutine_threadsafe()
+```
+
+- GUI 在主线程运行，通过 `root.after()` 异步更新界面
+- Playwright 异步操作在独立线程的事件循环中执行
+- 使用 `asyncio.run_coroutine_threadsafe()` 跨线程调度任务
+
+### AI 评论流程
+
+```
+┌─────────┐    ┌──────────┐    ┌─────────────┐    ┌──────────┐
+│ 定时截图 │ → │ 音频录制 │ → │ 组装上下文  │ → │ API 调用 │
+└─────────┘    └──────────┘    └─────────────┘    └──────────┘
+                                              ↓
+                                        ┌──────────┐
+                                        │ 发送评论 │
+                                        └──────────┘
+```
+
+1. 定时截图（base64 JPEG）
+2. 音频录制与转录（DashScope Qwen3-ASR）
+3. 组装消息：系统提示词 + 历史评论去重 + 语音上下文 + 画面
+4. 调用 OpenAI 兼容 API（Dashscope Qwen3-Omni）
+5. 自动发送评论到直播间
 
 ## 核心模块
 
@@ -103,22 +159,24 @@ python main.py <url> # CLI 模式
 {
   "ai_enabled": true,
   "ai_api_key": "YOUR_API_KEY",
-  "ai_model": "qwen3-omni-flash-2025-12-01",
+  "ai_model": "qwen-plus",
   "ai_comment_interval_min": 60,
   "ai_comment_interval_max": 120,
   "ai_temperature": 1.0,
   "ai_use_audio": true,
-  "ai_use_comment_history": true
+  "ai_use_comment_history": true,
+  "ai_enable_thinking": true
 }
 ```
 
 **配置项说明**：
 - `ai_enabled`: 是否启用 AI 评论
 - `ai_api_key`: DashScope API 密钥
-- `ai_model`: 使用的模型（qwen3-omni-flash / qwen-plus 等）
+- `ai_model`: 使用的模型（qwen-plus、qwen3-omni-flash 等）
 - `ai_temperature`: 生成温度（0.0-2.0，值越高越随机）
 - `ai_use_audio`: 是否使用音频转录作为上下文
 - `ai_use_comment_history`: 是否参考历史评论避免重复
+- `ai_enable_thinking`: 是否启用深度思考功能（提高评论质量）
 
 ### 循环模式配置
 
@@ -159,18 +217,21 @@ DouYin_AutoClik/
 ├── main.py                # CLI 入口
 ├── liker.py               # 核心点赞逻辑
 ├── auth.py                # 扫码登录
-├── base.py                # 浏览器基类
-├── audio_handler.py       # 音频处理
-├── config.py              # 配置管理
-├── build_config.py        # 打包路径配置
-├── config_wizard.py       # 配置向导
+├── base.py                # 浏览器基类（反检测、状态管理）
+├── audio_handler.py       # 音频录制与转录
+├── config.py              # 配置管理（默认值）
+├── build_config.py        # 打包环境路径配置
+├── config_wizard.py       # 首次运行配置向导
 ├── run_gui.bat            # GUI 启动脚本
+├── run.bat                # 直接运行脚本
 ├── login.bat              # 登录脚本
 ├── setup.bat              # 环境安装
 ├── build.bat              # 打包脚本
-├── .gitignore             # Git 忽略规则
+├── requirements.txt       # Python 依赖
+├── README.md              # 本文件（开发者文档）
+├── README.txt             # 打包用户文档
 ├── CLAUDE.md              # Claude Code 项目说明
-└── README.md              # 本文件
+└── .gitignore             # Git 忽略规则
 ```
 
 ## 注意事项
@@ -179,6 +240,22 @@ DouYin_AutoClik/
 - **适度使用**: 建议合理设置点击频率和休息时间，避免长时间连续运行
 - **API 配额**: AI 评论功能需要配置 DashScope API 密钥，注意使用配额
 - **音频录制**: 音频转录功能需要系统声卡支持
+- **游客模式**: 未登录状态也可运行，但 AI 评论等部分功能可能受限
+- **路径配置**: 打包后的 exe 会自动处理路径问题，配置和状态保存在 `data/` 目录
+
+## 隐私与安全
+
+### 已忽略的敏感文件
+
+| 文件 | 内容 | Git 追踪 |
+|-----|------|---------|
+| `state.json` | 登录状态、Cookie | ❌ 否 |
+| `config.json` | API 密钥、个人配置 | ❌ 否 |
+| `comment_history.json` | 评论历史 | ❌ 否 |
+| `logs/` | 运行日志、截图、音频 | ❌ 否 |
+| `*.spec` | PyInstaller 配置 | ❌ 否 |
+
+**重要**: 请勿将包含 API 密钥或登录状态的文件提交到公共仓库。
 
 ## 依赖项
 
@@ -199,8 +276,21 @@ numpy        # 数值计算
 build.bat
 ```
 
-打包后会生成 `dist/DouYin_AutoClik/` 目录，包含可执行文件及依赖。Playwright 浏览器已由构建脚本自动复制，可直接使用。
+打包后会生成 `dist/DouYin_AutoClik/` 目录，包含可执行文件及依赖。
+
+**打包说明**：
+- Playwright 浏览器已由构建脚本自动复制，无需手动操作
+- 打包后自动复制 `README.txt` 用户文档到输出目录
+- 打包产物不包含以下文件（由 .gitignore 控制）：`*.spec`、`logs/`、`data/`、`*.log`
 
 ## 许可证
 
 MIT License
+
+## 版本历史
+
+- **v1.0.0** (2026-02-23)
+  - 初始版本发布
+  - 自动点赞、AI 评论、音频转录
+  - 图形化界面、验证码检测
+  - 循环模式、防风控策略
