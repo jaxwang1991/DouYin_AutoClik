@@ -620,7 +620,7 @@ class DouYinLiker(BrowserBase):
 
     async def _do_click(self, video_element):
         """Execute click at random position"""
-        x, y = self._get_click_position(video_element)
+        x, y = await self._get_click_position(video_element)
         await self.page.mouse.click(x, y)
         self.total_likes += 1
 
@@ -634,11 +634,11 @@ class DouYinLiker(BrowserBase):
         else:
             await asyncio.sleep(random.uniform(self.config["slow_min"], self.config["slow_max"]))
 
-    def _get_click_position(self, video_element):
+    async def _get_click_position(self, video_element):
         """Calculate random click position"""
         if video_element:
             try:
-                box = video_element.bounding_box()
+                box = await video_element.bounding_box()
                 if box:
                     margin = box["width"] * Config.CLICK_AREA_MARGIN
                     x = box["x"] + random.uniform(margin, box["width"] - margin)

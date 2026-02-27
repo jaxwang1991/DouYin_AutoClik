@@ -22,6 +22,7 @@ Thumbs.db
 # 日志与运行产物
 logs/
 *.log
+logs/*.txt
 
 # 本地登录状态（包含敏感信息，禁止提交）
 state.json

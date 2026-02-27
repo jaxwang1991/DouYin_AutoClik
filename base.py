@@ -28,9 +28,9 @@ class BrowserBase:
 
         # Set Playwright browser path for packaged environment
         if getattr(sys, 'frozen', False):
-            from build_config import get_base_path
-            base_path = get_base_path()
-            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(base_path, "playwright", "driver")
+            from build_config import get_app_path
+            app_path = get_app_path()
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(app_path, "_internal", "playwright", "driver")
 
         self.playwright = await async_playwright().start()
 

@@ -34,10 +34,10 @@ class Config:
     SCREENSHOT_INTERVAL = 200  # every N likes
 
     # Login detection texts (separate from captcha detection)
-    LOGIN_REQUIRED_TEXTS = ["登录后即可点赞", "请先登录", "登录后查看"]
+    LOGIN_REQUIRED_TEXTS = ["登录后即可点赞", "请先登录", "登录后查看", "短信验证", "获取验证码"]
 
     # Captcha detection texts (excluding login prompts)
-    CAPTCHA_TEXTS = ["请完成下列验证后继续", "向右滑动完成拼图", "旋转图片", "短信验证", "获取验证码"]
+    CAPTCHA_TEXTS = ["请完成下列验证后继续", "向右滑动完成拼图", "旋转图片"]
     # Note: Removed overly broad "[class*='captcha']" selector to avoid
     # false positives with login interface elements
     CAPTCHA_SELECTORS = [".captcha_verify_container", "#captcha-verify-image"]

@@ -78,7 +78,8 @@ python main.py <url> # CLI 模式
 | `run.bat` | 直接运行主程序 |
 | `login.bat` | 独立扫码登录 |
 | `setup.bat` | 安装依赖和浏览器驱动 |
-| `build.bat` | 打包为可执行文件（自动处理 Playwright 浏览器） |
+| `build.bat` | 打包为可执行文件（调用 PowerShell） |
+| `build.ps1` | PowerShell 打包脚本（自动化构建） |
 
 ## 系统架构
 
@@ -147,6 +148,7 @@ GUI 采用 **线程 + 异步事件循环** 模式：
 | `audio_handler.py` | 音频录制与转录（DashScope Qwen3-ASR） |
 | `config.py` | 集中配置管理，包含所有默认值 |
 | `build_config.py` | 打包环境路径配置 |
+| `version.py` | 版本号配置（统一版本管理） |
 | `config_wizard.py` | 配置向导（首次运行时创建 config.json） |
 
 ## 配置说明
@@ -221,12 +223,15 @@ DouYin_AutoClik/
 ├── audio_handler.py       # 音频录制与转录
 ├── config.py              # 配置管理（默认值）
 ├── build_config.py        # 打包环境路径配置
+├── version.py             # 版本号配置
 ├── config_wizard.py       # 首次运行配置向导
 ├── run_gui.bat            # GUI 启动脚本
 ├── run.bat                # 直接运行脚本
 ├── login.bat              # 登录脚本
 ├── setup.bat              # 环境安装
-├── build.bat              # 打包脚本
+├── build.bat              # 打包脚本（调用 PowerShell）
+├── build.ps1              # PowerShell 自动化打包脚本
+├── DouYin_AutoClik.spec   # PyInstaller 配置
 ├── requirements.txt       # Python 依赖
 ├── README.md              # 本文件（开发者文档）
 ├── README.txt             # 打包用户文档
@@ -270,18 +275,49 @@ numpy        # 数值计算
 
 ## 打包发布
 
-使用 PyInstaller 打包为独立可执行文件：
+### 自动化打包
+
+双击运行 `build.bat` 调用 PowerShell 自动化打包：
 
 ```batch
 build.bat
 ```
 
-打包后会生成 `dist/DouYin_AutoClik/` 目录，包含可执行文件及依赖。
+### 打包流程
 
-**打包说明**：
-- Playwright 浏览器已由构建脚本自动复制，无需手动操作
-- 打包后自动复制 `README.txt` 用户文档到输出目录
-- 打包产物不包含以下文件（由 .gitignore 控制）：`*.spec`、`logs/`、`data/`、`*.log`
+1. **PyInstaller 构建** - 打包 Python 代码为 exe
+2. **Playwright 浏览器** - 自动复制 chromium + ffmpeg（仅复制必要组件）
+3. **目录结构** - 创建 data/logs 子目录
+4. **README 更新** - 自动替换版本号并复制到输出目录
+5. **Zip 压缩** - 生成 `DouYin_AutoClik-v{version}-win64.zip`
+
+### 输出产物
+
+```
+dist/DouYin_AutoClik-v1.0.0-win64.zip
+└── DouYin_AutoClik/
+    ├── DouYin_AutoClik.exe      # 无控制台窗口 GUI 程序
+    ├── _internal/
+    │   └── playwright/driver/
+    │       ├── chromium-1200/    # ~387MB
+    │       └── ffmpeg-1011/      # ~50MB
+    ├── data/                     # 运行时数据目录
+    │   ├── logs/
+    │   │   ├── audio/
+    │   │   └── transcripts/
+    │   └── state.json
+    └── README.txt
+```
+
+**体积参考**：
+- 打包文件夹：~600MB
+- Zip 压缩后：~247MB
+- 压缩率：~59%
+
+### 注意事项
+
+- 打包产物不包含 `*.spec`、`logs/`、`data/`、`*.log`（由 .gitignore 控制）
+- Playwright 浏览器仅复制必要组件（chromium + ffmpeg），大幅减小体积
 
 ## 许可证
 
@@ -289,8 +325,12 @@ MIT License
 
 ## 版本历史
 
-- **v1.0.0** (2026-02-23)
+- **v1.0.0** (2026-02-27)
   - 初始版本发布
   - 自动点赞、AI 评论、音频转录
   - 图形化界面、验证码检测
   - 循环模式、防风控策略
+  - 优化打包流程（PowerShell 自动化）
+  - 修复登录界面误判为验证码问题
+  - 修复协程未等待警告
+  - 窗口模式打包（无控制台）
